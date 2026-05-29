@@ -1,0 +1,109 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&family=Cairo:wght@400;600;700;900&display=swap');
+@import "tailwindcss";
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --font-sans: "Inter", "Cairo", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --color-primary: #3b82f6;
+}
+
+@layer base {
+  body {
+    direction: rtl;
+    text-align: right;
+    background-color: #f8fafc;
+    font-family: var(--font-sans);
+    color: #1e293b; /* slate-800 */
+    transition: background-color 0.3s ease, color 0.3s ease;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    user-select: none; /* Prevent selection accidents on mobile */
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  input, select, textarea, button {
+    @apply min-h-[44px]; /* Mobile reachability */
+  }
+}
+
+.dark body {
+  background-color: #0b0f19; /* dark blue slate background */
+  color: #f1f5f9;
+}
+
+@layer utilities {
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #e2e8f0;
+    border-radius: 10px;
+  }
+  .dark .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #1e293b;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #cbd5e1;
+  }
+  /* Elegant cards with depth */
+  .premium-card {
+    background-color: #ffffff;
+    border: 1px solid rgba(226, 232, 240, 0.8);
+    box-shadow: 0 4px 20px -2px rgba(148, 163, 184, 0.08), 0 2px 8px -1px rgba(148, 163, 184, 0.04);
+    border-radius: 1.25rem;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .dark .premium-card {
+    background-color: #131b2e;
+    border-color: rgba(30, 41, 59, 1);
+    box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.3);
+  }
+  .premium-card:active {
+    transform: scale(0.99);
+  }
+}
+
+/* Chrome, Safari, Edge, Opera */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Firefox */
+input[type=number] {
+  -moz-appearance: textfield;
+}
+
+input, select, textarea {
+  outline: none !important;
+}
+
+/* Beautiful custom soft animation keys */
+@keyframes fadeInSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-fade-up {
+  animation: fadeInSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+#invoice_wrapper {
+  position: relative !important;
+  z-index: 10 !important;
+}
+

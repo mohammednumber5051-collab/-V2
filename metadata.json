@@ -1,0 +1,8 @@
+{
+  "name": "نظام المحاسبة للبصريات المتكامل",
+  "description": "نظام محاسبي متكامل لمحل نظارات يشمل المبيعات، المشتريات، المخزون، وحسابات العملاء والموردين.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

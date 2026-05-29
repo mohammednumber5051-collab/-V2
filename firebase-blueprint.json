@@ -1,0 +1,336 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "System users and their roles",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "password": { "type": "string" },
+        "pin": { "type": "string" },
+        "role": { "type": "string" },
+        "permissions": { "type": "array", "items": { "type": "string" } },
+        "lastLogin": { "type": "string", "format": "date-time" },
+        "deviceInfo": { "type": "string" },
+        "recordStatus": { "type": "string", "enum": ["active", "archived", "deleted"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "role", "createdAt"]
+    },
+    "CashBox": {
+      "title": "Cash Box",
+      "description": "Financial cash boxes/safes",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "balance": { "type": "number" },
+        "currency": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "recordStatus": { "type": "string", "enum": ["active", "archived", "deleted"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "balance", "currency", "createdAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Inventory items (Frames, Lenses, etc.)",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "sku": { "type": "string" },
+        "category": { "type": "string" },
+        "purchasePrice": { "type": "number" },
+        "salePrice": { "type": "number" },
+        "stock": { "type": "number" },
+        "minStock": { "type": "number" },
+        "opticalAttributes": { "type": "object" },
+        "recordStatus": { "type": "string", "enum": ["active", "archived", "deleted"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "sku", "category", "purchasePrice", "salePrice", "stock", "createdAt"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Client information",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "balance": { "type": "number" },
+        "opticalProfile": { "type": "object" },
+        "recordStatus": { "type": "string", "enum": ["active", "archived", "deleted"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "phone", "balance", "createdAt"]
+    },
+    "Supplier": {
+      "title": "Supplier",
+      "description": "Supplier information",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "balance": { "type": "number" },
+        "recordStatus": { "type": "string", "enum": ["active", "archived", "deleted"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "phone", "balance", "createdAt"]
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "Sales and Purchase invoices",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["sale", "purchase"] },
+        "partnerId": { "type": "string" },
+        "partnerName": { "type": "string" },
+        "items": { "type": "array" },
+        "total": { "type": "number" },
+        "paid": { "type": "number" },
+        "discount": { "type": "number" },
+        "status": { "type": "string" },
+        "paymentType": { "type": "string" },
+        "referenceNumber": { "type": "string" },
+        "notes": { "type": "string" },
+        "currency": { "type": "string" },
+        "boxId": { "type": "string" },
+        "lifecycleStatus": { "type": "string" },
+        "recordStatus": { "type": "string", "enum": ["active", "archived", "deleted"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["type", "partnerName", "items", "total", "createdAt"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Financial transactions (Income, Expense, Transfer)",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string" },
+        "amount": { "type": "number" },
+        "currency": { "type": "string" },
+        "description": { "type": "string" },
+        "boxId": { "type": "string" },
+        "fromBoxId": { "type": "string" },
+        "toBoxId": { "type": "string" },
+        "relatedId": { "type": "string" },
+        "partnerId": { "type": "string" },
+        "partnerName": { "type": "string" },
+        "recordStatus": { "type": "string", "enum": ["active", "archived", "deleted"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["type", "amount", "currency", "createdAt"]
+    },
+    "AuditLog": {
+      "title": "Audit Log",
+      "description": "System activity logs",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "action": { "type": "string" },
+        "entityType": { "type": "string" },
+        "entityId": { "type": "string" },
+        "description": { "type": "string" },
+        "oldValue": { "type": "object" },
+        "newValue": { "type": "object" },
+        "deviceInfo": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "action", "entityType", "createdAt"]
+    },
+    "Warranty": {
+      "title": "Warranty",
+      "description": "Product warranty records",
+      "type": "object",
+      "properties": {
+        "invoiceId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["invoiceId", "customerId", "productId", "startDate", "endDate", "status", "createdAt"]
+    },
+    "RepairJob": {
+      "title": "Repair Job",
+      "description": "Maintenance and repair tasks",
+      "type": "object",
+      "properties": {
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "phone": { "type": "string" },
+        "repairCase": { "type": "string" },
+        "cost": { "type": "number" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["customerId", "customerName", "repairCase", "cost", "status", "createdAt"]
+    },
+    "SpecialOrder": {
+      "title": "Special Order",
+      "description": "Custom orders for specific items",
+      "type": "object",
+      "properties": {
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "phone": { "type": "string" },
+        "orderDetails": { "type": "string" },
+        "orderType": { "type": "string" },
+        "status": { "type": "string" },
+        "expectedDeliveryDate": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["customerId", "customerName", "orderDetails", "orderType", "status", "createdAt"]
+    },
+    "QuickFinancialEntry": {
+      "title": "Quick Financial Entry",
+      "description": "Simple financial records without full inventory impact",
+      "type": "object",
+      "properties": {
+        "entryType": { "type": "string" },
+        "partnerType": { "type": "string" },
+        "partnerName": { "type": "string" },
+        "amount": { "type": "number" },
+        "discount": { "type": "number" },
+        "netAmount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "remainingAmount": { "type": "number" },
+        "paymentStatus": { "type": "string" },
+        "cashBoxId": { "type": "string" },
+        "notes": { "type": "string" },
+        "currency": { "type": "string" },
+        "referenceNumber": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["entryType", "amount", "netAmount", "paidAmount", "createdAt"]
+    },
+    "DailyFinancialSummary": {
+      "title": "Daily Financial Summary",
+      "description": "Precomputed daily financial rollups",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string" },
+        "salesTotal": { "type": "number" },
+        "purchasesTotal": { "type": "number" },
+        "receiptsTotal": { "type": "number" },
+        "paymentsTotal": { "type": "number" },
+        "expensesTotal": { "type": "number" },
+        "profitsTotal": { "type": "number" },
+        "receivablesTotal": { "type": "number" },
+        "payablesTotal": { "type": "number" },
+        "transactionCount": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "MonthlyFinancialSummary": {
+      "title": "Monthly Financial Summary",
+      "description": "Precomputed monthly financial rollups",
+      "type": "object",
+      "properties": {
+        "month": { "type": "string" },
+        "salesTotal": { "type": "number" },
+        "purchasesTotal": { "type": "number" },
+        "profitsTotal": { "type": "number" },
+        "expensesTotal": { "type": "number" },
+        "netCashFlow": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "DashboardCache": {
+      "title": "Dashboard Cache",
+      "description": "Enterprise-level precomputed dashboard stats",
+      "type": "object",
+      "properties": {
+        "totalCustomers": { "type": "number" },
+        "totalSuppliers": { "type": "number" },
+        "totalProducts": { "type": "number" },
+        "totalInvoices": { "type": "number" },
+        "totalQuickEntries": { "type": "number" },
+        "totalCashBoxes": { "type": "number" },
+        "totalCashBalance": { "type": "number" },
+        "totalReceivables": { "type": "number" },
+        "totalPayables": { "type": "number" },
+        "todaySales": { "type": "number" },
+        "monthSales": { "type": "number" },
+        "lowStockCount": { "type": "number" },
+        "repairQueueCount": { "type": "number" },
+        "specialOrdersReadyCount": { "type": "number" },
+        "activeWarrantiesCount": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "StoreSettings": {
+      "title": "Store Settings",
+      "description": "Global application and store configuration",
+      "type": "object",
+      "properties": {
+        "storeNameAr": { "type": "string" },
+        "storeNameEn": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "phone": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "landline": { "type": "string" },
+        "email": { "type": "string" },
+        "address": { "type": "string" },
+        "googleMapsLink": { "type": "string" },
+        "commercialReg": { "type": "string" },
+        "taxNumber": { "type": "string" },
+        "printLogo": { "type": "boolean" },
+        "printStoreName": { "type": "boolean" },
+        "printPhone": { "type": "boolean" },
+        "printAddress": { "type": "boolean" },
+        "printWhatsapp": { "type": "boolean" },
+        "printQR": { "type": "boolean" },
+        "printFooterText": { "type": "string" },
+        "defaultPrintSize": { "type": "string" },
+        "language": { "type": "string" },
+        "defaultTheme": { "type": "string" },
+        "primaryColor": { "type": "string" },
+        "accentColor": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  },
+  "firestore": {
+    "users": { "schema": "User", "description": "System users" },
+    "cashBoxes": { "schema": "CashBox", "description": "Cash boxes" },
+    "products": { "schema": "Product", "description": "Inventory" },
+    "customers": { "schema": "Customer", "description": "Customers" },
+    "suppliers": { "schema": "Supplier", "description": "Suppliers" },
+    "invoices": { "schema": "Invoice", "description": "Invoices" },
+    "quick_financial_entries": { "schema": "QuickFinancialEntry", "description": "Quick entries" },
+    "transactions": { "schema": "Transaction", "description": "Transactions" },
+    "auditLogs": { "schema": "AuditLog", "description": "Audit logs" },
+    "warranties": { "schema": "Warranty", "description": "Product warranties" },
+    "repairJobs": { "schema": "RepairJob", "description": "Repair tasks" },
+    "repairs": { "schema": "RepairJob", "description": "Repair tasks (Legacy/Active name)" },
+    "specialOrders": { "schema": "SpecialOrder", "description": "Special orders" },
+    "special_orders": { "schema": "SpecialOrder", "description": "Special orders (Legacy/Active name)" },
+    "daily_financial_summaries": { "schema": "DailyFinancialSummary", "description": "Daily rollups" },
+    "monthly_financial_summaries": { "schema": "MonthlyFinancialSummary", "description": "Monthly rollups" },
+    "dashboard_cache": { "schema": "DashboardCache", "description": "Global dashboard stats" },
+    "settings": { "schema": "StoreSettings", "description": "Global app settings" }
+  }
+}
