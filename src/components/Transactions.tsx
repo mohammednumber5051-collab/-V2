@@ -33,7 +33,7 @@ import { cn } from "../lib/utils";
 
 type Tab = "transactions" | "boxes" | "transfers";
 
-export default function Transactions() {
+export default function Transactions({ currentUser: propCurrentUser }: { currentUser?: any }) {
   const [activeTab, setActiveTab] = useState<Tab>("transactions");
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [lastDoc, setLastDoc] = useState<any>(null);
@@ -48,7 +48,7 @@ export default function Transactions() {
     customers: Customer[];
     suppliers: Supplier[];
   }>({ customers: [], suppliers: [] });
-  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(propCurrentUser || null);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalType, setModalType] = useState<
@@ -85,11 +85,15 @@ export default function Transactions() {
   const isAdmin = currentUser?.role === "SUPER_ADMIN" || currentUser?.role === "ADMIN";
 
   useEffect(() => {
-    const savedUser = localStorage.getItem("app_user");
-    if (savedUser) setCurrentUser(JSON.parse(savedUser));
+    if (propCurrentUser) {
+      setCurrentUser(propCurrentUser);
+    } else {
+      const savedUser = localStorage.getItem("app_user");
+      if (savedUser) setCurrentUser(JSON.parse(savedUser));
+    }
     loadStaticData();
     loadTransactions(true);
-  }, []);
+  }, [propCurrentUser]);
 
   const loadStaticData = async () => {
       const [boxes, userData, customers, suppliers] = await Promise.all([

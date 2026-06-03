@@ -129,6 +129,20 @@ function AppContent() {
   }, [currentUser, isLocked]);
 
   const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   useEffect(() => {
     // Keyboard Handling for mobile layout stabilization
@@ -207,6 +221,7 @@ function AppContent() {
     if (currentUser && currentUser.id) {
         await authService.logout(currentUser.id);
     }
+    localStorage.removeItem("app_user");
     setCurrentUser(null);
     setIsLocked(false);
     if (typeof reason === 'string') alert(reason);
@@ -222,6 +237,7 @@ function AppContent() {
   if (!currentUser) {
     return <Login onLogin={(user) => {
         setCurrentUser(user);
+        localStorage.setItem("app_user", JSON.stringify(user));
         setIsLocked(false);
         resetSessionTimeout();
     }} />;
@@ -251,13 +267,13 @@ function AppContent() {
 
     switch (activePage) {
       case 'dashboard': return <Dashboard onNavigate={(page: any) => setActivePage(page)} currentUser={currentUser} />;
-      case 'invoices': return <InvoicesWrapper />;
-      case 'inventory': return <Inventory />;
-      case 'transactions': return <Transactions />;
+      case 'invoices': return <InvoicesWrapper currentUser={currentUser} />;
+      case 'inventory': return <Inventory currentUser={currentUser} />;
+      case 'transactions': return <Transactions currentUser={currentUser} />;
       case 'reports': return <Reports />;
       case 'partners': return <PartnersWrapper />;
       case 'users': return <Users />;
-      case 'quick_entry': return <QuickEntry onNavigate={(p: any, params?: any) => {
+      case 'quick_entry': return <QuickEntry currentUser={currentUser} onNavigate={(p: any, params?: any) => {
         if (p === 'quick_entry' && params?.editId) {
           setEditQuickEntryId(params.editId);
         } else if (p === 'quick_entry') {
@@ -431,6 +447,12 @@ function AppContent() {
             </h2>
         </div>
         <div className="flex items-center gap-1">
+            {!isOnline && (
+              <div className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400 text-[10px] font-black bg-amber-50 dark:bg-amber-500/10 px-2.5 py-1.5 rounded-xl border border-amber-100/50 dark:border-amber-500/20 shadow-sm animate-pulse tracking-wide">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                <span>العمل دون اتصال</span>
+              </div>
+            )}
             <div className="hidden md:flex items-center gap-2 text-slate-500 dark:text-slate-400 text-xs font-bold bg-slate-50 dark:bg-slate-800/40 px-3 py-1.5 rounded-xl border border-slate-100 dark:border-slate-800">
               <Calendar size={13} className="text-blue-500" />
               {new Date().toLocaleDateString('ar-EG', { weekday: 'long', month: 'short', day: 'numeric' })}

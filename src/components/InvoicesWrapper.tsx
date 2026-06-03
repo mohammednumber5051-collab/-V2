@@ -1,7 +1,7 @@
 import { useState } from "react";
 import Invoices from "./Invoices";
 
-export default function InvoicesWrapper() {
+export default function InvoicesWrapper({ currentUser }: { currentUser?: any }) {
   const [activeTab, setActiveTab] = useState<'sale' | 'purchase'>('sale');
 
   return (
@@ -29,7 +29,7 @@ export default function InvoicesWrapper() {
         </button>
       </div>
       <div className="">
-        <Invoices type={activeTab} />
+        <Invoices type={activeTab} currentUser={currentUser} />
       </div>
     </div>
   );

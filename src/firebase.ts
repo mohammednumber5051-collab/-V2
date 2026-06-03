@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, doc, getDocFromServer, enableIndexedDbPersistence } from "firebase/firestore";
+import { initializeFirestore, doc, getDocFromServer, enableIndexedDbPersistence, disableNetwork } from "firebase/firestore";
 import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signInAnonymously } from "firebase/auth";
 import config from "../firebase-applet-config.json";
 
@@ -80,22 +80,36 @@ export const waitForAuth = (): Promise<AuthState> => {
                 unsubscribe();
                 resolve({ user: null, status: 'unauthenticated' });
             }
-        }, 12000);
+        }, 2500);
     });
 };
 
 // Validate Connection to Firestore (as per skill recommendation)
 async function testConnection() {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        console.info("Firestore status: Operating in offline cache mode.");
+        try {
+            await disableNetwork(db);
+        } catch (e) {}
+        return;
+    }
+
     try {
         await waitForAuth();
-        // Quick check to see if we can reach the server
-        await getDocFromServer(doc(db, 'system', 'connection_test')).catch(() => {
-            // It's fine if doc doesn't exist, we just want to see if we can talk to Firestore
-        });
+        // Set a smart timeout of 2000ms to quickly fall back and prevent blocking
+        const connectionPromise = getDocFromServer(doc(db, 'system', 'connection_test'));
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error("Connection check timed out")), 2000)
+        );
+
+        await Promise.race([connectionPromise, timeoutPromise]);
         console.log("Firebase connection established successfully.");
     } catch (error) {
-        if (error instanceof Error && error.message.includes('the client is offline')) {
-            console.error("Firebase client is offline. Check configuration or internet connection.");
+        console.warn("Firebase client is offline or unreachable. Disabling network to prevent hangs.", error);
+        try {
+            await disableNetwork(db);
+        } catch (e) {
+            console.error("Failed to disable Firestore network:", e);
         }
     }
 }

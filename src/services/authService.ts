@@ -112,6 +112,7 @@ export const authService = {
         };
         
         localStorage.setItem(SESSION_KEY, JSON.stringify(sessionPayload));
+        localStorage.setItem("app_user", JSON.stringify(updateDoc));
 
         try {
             await dbService.logAudit('LOGIN', 'User', user.id || 'SYS', 'تسجيل دخول ناجح (جلسة مؤمنة)');
@@ -153,23 +154,43 @@ export const authService = {
             }
 
             // 3. Check Database Integrity (Remote Invalidation)
-            const users = await dbService.getAll("users") as AppUser[];
-            const freshUser = users.find(u => u.id === payload.userId);
-            
-            if (!freshUser || freshUser.isActive === false || freshUser.recordStatus === 'deleted') {
-                this.forceLogout();
-                return null;
-            }
+            let freshUser: AppUser | undefined = undefined;
+            try {
+                const users = await dbService.getAll("users") as AppUser[];
+                freshUser = users.find(u => u.id === payload.userId);
+                
+                if (!freshUser || freshUser.isActive === false || freshUser.recordStatus === 'deleted') {
+                    this.forceLogout();
+                    return null;
+                }
 
-            if ((freshUser.sessionVersion || 1) !== payload.sessionVersion) {
-                console.warn("[AuthService] Session version mismatch (remote sign-out)");
-                this.forceLogout();
-                return null;
+                if ((freshUser.sessionVersion || 1) !== payload.sessionVersion) {
+                    console.warn("[AuthService] Session version mismatch (remote sign-out)");
+                    this.forceLogout();
+                    return null;
+                }
+            } catch (dbErr) {
+                console.warn("[AuthService] Remote DB check failed (likely offline). Falling back to offline cached session.", dbErr);
+                const localUserStr = localStorage.getItem("app_user");
+                if (localUserStr) {
+                    try {
+                        const parsed = JSON.parse(localUserStr);
+                        if (parsed && parsed.id === payload.userId) {
+                            freshUser = parsed;
+                        }
+                    } catch (e) {}
+                }
+                
+                if (!freshUser) {
+                    this.forceLogout();
+                    return null;
+                }
             }
 
             // Update local activity to prevent idle logout (client side)
             payload.lastActivity = Date.now();
             localStorage.setItem(SESSION_KEY, JSON.stringify(payload));
+            localStorage.setItem("app_user", JSON.stringify(freshUser));
 
             return freshUser;
         } catch (e) {
@@ -181,6 +202,7 @@ export const authService = {
 
     forceLogout() {
         localStorage.removeItem(SESSION_KEY);
+        localStorage.removeItem("app_user");
     },
 
     async logout(userId: string) {

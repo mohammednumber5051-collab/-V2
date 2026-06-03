@@ -17,15 +17,19 @@ const categories: Category[] = [
     'أخرى'
 ];
 
-export default function Inventory() {
-    const [currentUser, setCurrentUser] = useState<any>(null);
+export default function Inventory({ currentUser: propCurrentUser }: { currentUser?: any }) {
+    const [currentUser, setCurrentUser] = useState<any>(propCurrentUser || null);
 
     useEffect(() => {
-        try {
-            const u = localStorage.getItem("app_user");
-            if (u) setCurrentUser(JSON.parse(u));
-        } catch (e) {}
-    }, []);
+        if (propCurrentUser) {
+            setCurrentUser(propCurrentUser);
+        } else {
+            try {
+                const u = localStorage.getItem("app_user");
+                if (u) setCurrentUser(JSON.parse(u));
+            } catch (e) {}
+        }
+    }, [propCurrentUser]);
 
     const [products, setProducts] = useState<Product[]>([]);
     const [lastDoc, setLastDoc] = useState<any>(null);

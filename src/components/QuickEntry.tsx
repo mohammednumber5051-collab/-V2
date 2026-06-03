@@ -8,6 +8,7 @@ import { cn } from "../lib/utils";
 interface QuickEntryProps {
     onNavigate: (page: string, params?: any) => void;
     editId?: string | null;
+    currentUser?: any;
 }
 
 const ENTRY_TYPES: { value: QuickEntryType; label: string; color: string }[] = [
@@ -26,7 +27,7 @@ const ENTRY_TYPE_LABELS: Record<string, string> = {
     adjustment: "تسوية مالية"
 };
 
-export default function QuickEntry({ onNavigate, editId }: QuickEntryProps) {
+export default function QuickEntry({ onNavigate, editId, currentUser: propCurrentUser }: QuickEntryProps) {
     const [entryType, setEntryType] = useState<QuickEntryType>('manual_sale');
     const [referenceNumber, setReferenceNumber] = useState("");
     const [partnerType, setPartnerType] = useState<'customer' | 'supplier' | 'none'>('customer');
@@ -45,7 +46,7 @@ export default function QuickEntry({ onNavigate, editId }: QuickEntryProps) {
     const [cashBoxes, setCashBoxes] = useState<CashBox[]>([]);
     const [selectedCashBoxId, setSelectedCashBoxId] = useState("");
     const [settings, setSettings] = useState<StoreSettings | null>(null);
-    const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+    const [currentUser, setCurrentUser] = useState<AppUser | null>(propCurrentUser || null);
     const [oldEntryData, setOldEntryData] = useState<QuickFinancialEntry | null>(null);
     
     const partnerRef = useRef<HTMLInputElement>(null);
@@ -70,8 +71,12 @@ export default function QuickEntry({ onNavigate, editId }: QuickEntryProps) {
                 setCashBoxes(boxes as CashBox[]);
                 setSettings(allSettings);
 
-                const savedUser = localStorage.getItem("app_user");
-                if (savedUser) setCurrentUser(JSON.parse(savedUser));
+                if (propCurrentUser) {
+                    setCurrentUser(propCurrentUser);
+                } else {
+                    const savedUser = localStorage.getItem("app_user");
+                    if (savedUser) setCurrentUser(JSON.parse(savedUser));
+                }
 
                 if (editId) {
                     const allEntries = await dbService.getAll("quick_financial_entries") as QuickFinancialEntry[];

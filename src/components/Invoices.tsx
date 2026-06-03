@@ -19,20 +19,25 @@ const PAYMENT_TYPES: { value: PaymentType; label: string; en: string }[] = [
 
 interface InvoicesProps {
     type: 'sale' | 'purchase';
+    currentUser?: any;
 }
 
 type PrintTemplate = 'A4' | 'A3' | 'Thermal80' | 'Thermal58';
 type PrintLanguage = 'AR' | 'EN' | 'BILINGUAL';
 
-export default function Invoices({ type }: InvoicesProps) {
-    const [currentUser, setCurrentUser] = useState<any>(null);
+export default function Invoices({ type, currentUser: propCurrentUser }: InvoicesProps) {
+    const [currentUser, setCurrentUser] = useState<any>(propCurrentUser || null);
 
     useEffect(() => {
-        try {
-            const u = localStorage.getItem("app_user");
-            if (u) setCurrentUser(JSON.parse(u));
-        } catch (e) {}
-    }, []);
+        if (propCurrentUser) {
+            setCurrentUser(propCurrentUser);
+        } else {
+            try {
+                const u = localStorage.getItem("app_user");
+                if (u) setCurrentUser(JSON.parse(u));
+            } catch (e) {}
+        }
+    }, [propCurrentUser]);
 
     const [invoices, setInvoices] = useState<Invoice[]>([]);
     const [lastInvoiceDoc, setLastInvoiceDoc] = useState<any>(null);

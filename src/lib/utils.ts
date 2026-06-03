@@ -7,9 +7,23 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function hasPermission(user: AppUser | null | undefined, permissionId: string): boolean {
-  if (!user || user.isActive === false) return false;
+  if (!user) {
+    // If user structure is not yet loaded in state, allow viewing basic operations by default if logged in
+    const localUserStr = typeof window !== 'undefined' ? localStorage.getItem("app_user") : null;
+    if (localUserStr) {
+      try {
+        const parsed = JSON.parse(localUserStr);
+        if (parsed) user = parsed;
+      } catch (e) {}
+    }
+  }
   
-  if (user.role === "SUPER_ADMIN" || (user.permissions && (user.permissions.includes('*') || user.permissions.includes('all')))) {
+  if (!user) return false;
+  if (user.isActive === false) return false;
+  
+  const normalizedRole = (user.role || '').toUpperCase().trim();
+  
+  if (normalizedRole === "SUPER_ADMIN" || (user.permissions && (user.permissions.includes('*') || user.permissions.includes('all')))) {
     return true;
   }
   
@@ -20,14 +34,15 @@ export function hasPermission(user: AppUser | null | undefined, permissionId: st
 
   // Role defaults mapping
   const rolePermissions: Record<string, string[]> = {
-    'ADMIN': ['dashboard', 'invoices', 'inventory', 'reports', 'transactions', 'partners', 'quick_entry', 'daily_ledger', 'optical_hub', 'users', 'auth_logs', 'store_settings'],
-    'ACCOUNTANT': ['dashboard', 'invoices', 'inventory', 'reports', 'transactions', 'partners', 'quick_entry', 'daily_ledger', 'optical_hub'],
-    'CASHIER': ['dashboard', 'invoices', 'quick_entry', 'daily_ledger', 'optical_hub'],
+    'SUPER_ADMIN': ['*'],
+    'ADMIN': ['dashboard', 'invoices', 'add_invoices', 'inventory', 'edit_inventory', 'reports', 'transactions', 'partners', 'quick_entry', 'daily_ledger', 'optical_hub', 'users', 'auth_logs', 'store_settings'],
+    'ACCOUNTANT': ['dashboard', 'invoices', 'add_invoices', 'inventory', 'edit_inventory', 'reports', 'transactions', 'partners', 'quick_entry', 'daily_ledger', 'optical_hub'],
+    'CASHIER': ['dashboard', 'invoices', 'add_invoices', 'quick_entry', 'daily_ledger', 'optical_hub'],
     'EMPLOYEE': ['dashboard', 'inventory', 'optical_hub'],
     'VIEWER': ['dashboard']
   };
 
-  const allowedForRole = rolePermissions[user.role] || [];
+  const allowedForRole = rolePermissions[normalizedRole] || [];
   return allowedForRole.includes(permissionId);
 }
 

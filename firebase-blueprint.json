@@ -311,6 +311,19 @@
         "accentColor": { "type": "string" },
         "updatedAt": { "type": "string", "format": "date-time" }
       }
+    },
+    "BackupRecord": {
+      "title": "Backup Record",
+      "description": "System database backup logs",
+      "type": "object",
+      "properties": {
+        "fileName": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "sizeBytes": { "type": "number" },
+        "status": { "type": "string", "enum": ["completed", "failed", "in_progress"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["fileName", "createdBy", "sizeBytes", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -331,6 +344,7 @@
     "daily_financial_summaries": { "schema": "DailyFinancialSummary", "description": "Daily rollups" },
     "monthly_financial_summaries": { "schema": "MonthlyFinancialSummary", "description": "Monthly rollups" },
     "dashboard_cache": { "schema": "DashboardCache", "description": "Global dashboard stats" },
-    "settings": { "schema": "StoreSettings", "description": "Global app settings" }
+    "settings": { "schema": "StoreSettings", "description": "Global app settings" },
+    "backups": { "schema": "BackupRecord", "description": "Database backup logs" }
   }
 }

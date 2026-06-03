@@ -1457,94 +1457,354 @@ const remoteDbService = {
     }
 };
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number = 2500): Promise<T> {
+    return Promise.race([
+        promise,
+        new Promise<T>((_, reject) => 
+            setTimeout(() => reject(new Error("Firestore operation timed out")), timeoutMs)
+        )
+    ]);
+}
+
 export const dbService = {
     async logAudit(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.logAudit as any)(...args);
-        return (remoteDbService.logAudit as any)(...args);
+        try {
+            return await withTimeout((remoteDbService.logAudit as any)(...args));
+        } catch (e) {
+            console.warn("[dbService] remote logAudit failed, falling back to localDbService", e);
+            return await (localDbService.logAudit as any)(...args);
+        }
     },
     async getAll(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.getAll as any)(...args);
-        return (remoteDbService.getAll as any)(...args);
+        try {
+            const res = await withTimeout((remoteDbService.getAll as any)(...args));
+            // Symmetrically cache results locally
+            try {
+                const collectionName = args[0];
+                if (res && Array.isArray(res) && collectionName) {
+                    saveLocalColl(collectionName, res);
+                }
+            } catch (e) {}
+            return res;
+        } catch (e) {
+            console.warn(`[dbService] remote getAll(${args[0]}) failed, falling back to localDbService`, e);
+            return await (localDbService.getAll as any)(...args);
+        }
     },
     async getArchived(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.getArchived as any)(...args);
-        return (remoteDbService.getArchived as any)(...args);
+        try {
+            return await withTimeout((remoteDbService.getArchived as any)(...args));
+        } catch (e) {
+            console.warn(`[dbService] remote getArchived(${args[0]}) failed, falling back to localDbService`, e);
+            return await (localDbService.getArchived as any)(...args);
+        }
     },
     async getPaginated(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.getPaginated as any)(...args);
-        return (remoteDbService.getPaginated as any)(...args);
+        try {
+            const res = await withTimeout((remoteDbService.getPaginated as any)(...args)) as any;
+            // Symmetrically cache the first page
+            try {
+                const collectionName = args[0];
+                const lastVisibleDoc = args[2];
+                if (res && res.data && Array.isArray(res.data) && !lastVisibleDoc && collectionName) {
+                    const existingLocal = getLocalColl(collectionName);
+                    const merged = [...res.data];
+                    for (const item of existingLocal) {
+                        const hasNew = merged.some(m => m.id === item.id);
+                        if (!hasNew) {
+                            merged.push(item);
+                        }
+                    }
+                    saveLocalColl(collectionName, merged);
+                }
+            } catch (e) {}
+            return res;
+        } catch (e) {
+            console.warn(`[dbService] remote getPaginated(${args[0]}) failed, falling back to localDbService`, e);
+            return await (localDbService.getPaginated as any)(...args);
+        }
     },
     async add(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.add as any)(...args);
-        return (remoteDbService.add as any)(...args);
+        try {
+            const newId = await withTimeout((remoteDbService.add as any)(...args));
+            try {
+                const collectionName = args[0];
+                const data = args[1];
+                if (collectionName && data) {
+                    const localColl = getLocalColl(collectionName);
+                    const localDoc = { ...data, id: newId, recordStatus: 'active', updatedAt: new Date().toISOString(), createdAt: new Date().toISOString() };
+                    localColl.push(localDoc);
+                    saveLocalColl(collectionName, localColl);
+                }
+            } catch (e) {}
+            return newId;
+        } catch (e) {
+            console.warn(`[dbService] remote add(${args[0]}) failed, falling back to localDbService`, e);
+            return await (localDbService.add as any)(...args);
+        }
     },
     async update(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.update as any)(...args);
-        return (remoteDbService.update as any)(...args);
+        try {
+            const res = await withTimeout((remoteDbService.update as any)(...args));
+            try {
+                const collectionName = args[0];
+                const id = args[1];
+                const data = args[2];
+                if (collectionName && id && data) {
+                    const localColl = getLocalColl(collectionName);
+                    const idx = localColl.findIndex(item => item.id === id);
+                    if (idx !== -1) {
+                        localColl[idx] = { ...localColl[idx], ...data, updatedAt: new Date().toISOString() };
+                        saveLocalColl(collectionName, localColl);
+                    }
+                }
+            } catch (e) {}
+            return res;
+        } catch (e) {
+            console.warn(`[dbService] remote update(${args[0]}, ${args[1]}) failed, falling back to localDbService`, e);
+            return await (localDbService.update as any)(...args);
+        }
     },
     async softDelete(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.softDelete as any)(...args);
-        return (remoteDbService.softDelete as any)(...args);
+        try {
+            const res = await withTimeout((remoteDbService.softDelete as any)(...args));
+            try {
+                const collectionName = args[0];
+                const id = args[1];
+                if (collectionName && id) {
+                    const localColl = getLocalColl(collectionName);
+                    const idx = localColl.findIndex(item => item.id === id);
+                    if (idx !== -1) {
+                        localColl[idx].recordStatus = 'deleted';
+                        localColl[idx].updatedAt = new Date().toISOString();
+                        saveLocalColl(collectionName, localColl);
+                    }
+                }
+            } catch (e) {}
+            return res;
+        } catch (e) {
+            console.warn(`[dbService] remote softDelete(${args[0]}, ${args[1]}) failed, falling back to localDbService`, e);
+            return await (localDbService.softDelete as any)(...args);
+        }
     },
     async restoreArchived(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.restoreArchived as any)(...args);
-        return (remoteDbService.restoreArchived as any)(...args);
+        try {
+            const res = await withTimeout((remoteDbService.restoreArchived as any)(...args));
+            try {
+                const collectionName = args[0];
+                const id = args[1];
+                if (collectionName && id) {
+                    const localColl = getLocalColl(collectionName);
+                    const idx = localColl.findIndex(item => item.id === id);
+                    if (idx !== -1) {
+                        localColl[idx].recordStatus = 'active';
+                        localColl[idx].updatedAt = new Date().toISOString();
+                        saveLocalColl(collectionName, localColl);
+                    }
+                }
+            } catch (e) {}
+            return res;
+        } catch (e) {
+            console.warn(`[dbService] remote restoreArchived(${args[0]}, ${args[1]}) failed, falling back to localDbService`, e);
+            return await (localDbService.restoreArchived as any)(...args);
+        }
     },
     async delete(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.delete as any)(...args);
-        return (remoteDbService.delete as any)(...args);
+        try {
+            const res = await withTimeout((remoteDbService.delete as any)(...args));
+            try {
+                const collectionName = args[0];
+                const id = args[1];
+                if (collectionName && id) {
+                    const localColl = getLocalColl(collectionName);
+                    const filtered = localColl.filter(item => item.id !== id);
+                    saveLocalColl(collectionName, filtered);
+                }
+            } catch (e) {}
+            return res;
+        } catch (e) {
+            console.warn(`[dbService] remote delete(${args[0]}, ${args[1]}) failed, falling back to localDbService`, e);
+            return await (localDbService.delete as any)(...args);
+        }
     },
     async createInvoice(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.createInvoice as any)(...args);
-        return (remoteDbService.createInvoice as any)(...args);
+        try {
+            const resInvoiceId = await withTimeout((remoteDbService.createInvoice as any)(...args));
+            try {
+                const invoice = args[0];
+                if (invoice) {
+                    await (localDbService.createInvoice as any)({ ...invoice, id: resInvoiceId });
+                }
+            } catch (e) {}
+            return resInvoiceId;
+        } catch (e) {
+            console.warn(`[dbService] remote createInvoice failed, falling back to localDbService`, e);
+            return await (localDbService.createInvoice as any)(...args);
+        }
     },
     async deleteInvoiceData(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.deleteInvoiceData as any)(...args);
-        return (remoteDbService.deleteInvoiceData as any)(...args);
+        try {
+            const res = await withTimeout((remoteDbService.deleteInvoiceData as any)(...args));
+            try {
+                await (localDbService.deleteInvoiceData as any)(...args);
+            } catch (e) {}
+            return res;
+        } catch (e) {
+            console.warn(`[dbService] remote deleteInvoiceData failed, falling back to localDbService`, e);
+            return await (localDbService.deleteInvoiceData as any)(...args);
+        }
     },
     async updateInvoiceData(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.updateInvoiceData as any)(...args);
-        return (remoteDbService.updateInvoiceData as any)(...args);
+        try {
+            const res = await withTimeout((remoteDbService.updateInvoiceData as any)(...args));
+            try {
+                await (localDbService.updateInvoiceData as any)(...args);
+            } catch (e) {}
+            return res;
+        } catch (e) {
+            console.warn(`[dbService] remote updateInvoiceData failed, falling back to localDbService`, e);
+            return await (localDbService.updateInvoiceData as any)(...args);
+        }
     },
     async addTransaction(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.addTransaction as any)(...args);
-        return (remoteDbService.addTransaction as any)(...args);
+        try {
+            const resTransId = await withTimeout((remoteDbService.addTransaction as any)(...args));
+            try {
+                const trans = args[0];
+                if (trans) {
+                    await (localDbService.addTransaction as any)({ ...trans, id: resTransId });
+                }
+            } catch (e) {}
+            return resTransId;
+        } catch (e) {
+            console.warn(`[dbService] remote addTransaction failed, falling back to localDbService`, e);
+            return await (localDbService.addTransaction as any)(...args);
+        }
     },
     async updateTransactionData(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.updateTransactionData as any)(...args);
-        return (remoteDbService.updateTransactionData as any)(...args);
+        try {
+            const res = await withTimeout((remoteDbService.updateTransactionData as any)(...args));
+            try {
+                await (localDbService.updateTransactionData as any)(...args);
+            } catch (e) {}
+            return res;
+        } catch (e) {
+            console.warn(`[dbService] remote updateTransactionData failed, falling back to localDbService`, e);
+            return await (localDbService.updateTransactionData as any)(...args);
+        }
     },
     async deleteTransactionData(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.deleteTransactionData as any)(...args);
-        return (remoteDbService.deleteTransactionData as any)(...args);
+        try {
+            const res = await withTimeout((remoteDbService.deleteTransactionData as any)(...args));
+            try {
+                await (localDbService.deleteTransactionData as any)(...args);
+            } catch (e) {}
+            return res;
+        } catch (e) {
+            console.warn(`[dbService] remote deleteTransactionData failed, falling back to localDbService`, e);
+            return await (localDbService.deleteTransactionData as any)(...args);
+        }
     },
     async deleteAllTransactions(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.deleteAllTransactions as any)(...args);
-        return (remoteDbService.deleteAllTransactions as any)(...args);
+        try {
+            const res = await withTimeout((remoteDbService.deleteAllTransactions as any)(...args));
+            try {
+                await (localDbService.deleteAllTransactions as any)(...args);
+            } catch (e) {}
+            return res;
+        } catch (e) {
+            console.warn(`[dbService] remote deleteAllTransactions failed, falling back to localDbService`, e);
+            return await (localDbService.deleteAllTransactions as any)(...args);
+        }
     },
     async createTransfer(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.createTransfer as any)(...args);
-        return (remoteDbService.createTransfer as any)(...args);
+        try {
+            const resTransferId = await withTimeout((remoteDbService.createTransfer as any)(...args));
+            try {
+                const [fromBoxId, toBoxId, amount, currency, description] = args;
+                await (localDbService.createTransfer as any)(fromBoxId, toBoxId, amount, currency, description);
+            } catch (e) {}
+            return resTransferId;
+        } catch (e) {
+            console.warn(`[dbService] remote createTransfer failed, falling back to localDbService`, e);
+            return await (localDbService.createTransfer as any)(...args);
+        }
     },
     async updateBoxBalance(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.updateBoxBalance as any)(...args);
-        return (remoteDbService.updateBoxBalance as any)(...args);
+        try {
+            const res = await withTimeout((remoteDbService.updateBoxBalance as any)(...args));
+            try {
+                await (localDbService.updateBoxBalance as any)(...args);
+            } catch (e) {}
+            return res;
+        } catch (e) {
+            console.warn(`[dbService] remote updateBoxBalance failed, falling back to localDbService`, e);
+            return await (localDbService.updateBoxBalance as any)(...args);
+        }
     },
     async createFullDatabaseBackup(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.createFullDatabaseBackup as any)(...args);
-        return (remoteDbService.createFullDatabaseBackup as any)(...args);
+        try {
+            return await withTimeout((remoteDbService.createFullDatabaseBackup as any)(...args));
+        } catch (e) {
+            console.warn(`[dbService] remote createFullDatabaseBackup failed, falling back to localDbService`, e);
+            return await (localDbService.createFullDatabaseBackup as any)(...args);
+        }
     },
     async restoreFullDatabaseBackup(...args: any[]) {
         if (isPlaceholderConfig) return (localDbService.restoreFullDatabaseBackup as any)(...args);
-        return (remoteDbService.restoreFullDatabaseBackup as any)(...args);
+        try {
+            return await withTimeout((remoteDbService.restoreFullDatabaseBackup as any)(...args));
+        } catch (e) {
+            console.warn(`[dbService] remote restoreFullDatabaseBackup failed, falling back to localDbService`, e);
+            return await (localDbService.restoreFullDatabaseBackup as any)(...args);
+        }
     },
     async getStoreSettings() {
         if (isPlaceholderConfig) return localDbService.getStoreSettings();
-        return remoteDbService.getStoreSettings();
+        try {
+            const res = await withTimeout(remoteDbService.getStoreSettings());
+            try {
+                if (res) {
+                    localStorage.setItem(`fp_db_settings`, JSON.stringify([res]));
+                }
+            } catch (e) {}
+            return res;
+        } catch (e) {
+            console.warn(`[dbService] remote getStoreSettings failed, falling back to localDbService`, e);
+            return await localDbService.getStoreSettings();
+        }
     },
     async updateStoreSettings(data: any) {
         if (isPlaceholderConfig) return localDbService.updateStoreSettings(data);
-        return remoteDbService.updateStoreSettings(data);
+        try {
+            const res = await withTimeout(remoteDbService.updateStoreSettings(data));
+            try {
+                await localDbService.updateStoreSettings(data);
+            } catch (e) {}
+            return res;
+        } catch (e) {
+            console.warn(`[dbService] remote updateStoreSettings failed, falling back to localDbService`, e);
+            return await localDbService.updateStoreSettings(data);
+        }
     },
     async createQuickFinancialEntry(entry: any) {
         if (isPlaceholderConfig) {
@@ -1554,7 +1814,22 @@ export const dbService = {
             saveLocalColl("quick_financial_entries", coll);
             return id;
         }
-        return remoteDbService.createQuickFinancialEntry(entry);
+        try {
+            const resEntryId = await withTimeout(remoteDbService.createQuickFinancialEntry(entry));
+            try {
+                const coll = getLocalColl("quick_financial_entries");
+                coll.push({ ...entry, id: resEntryId, createdAt: new Date().toISOString() });
+                saveLocalColl("quick_financial_entries", coll);
+            } catch (e) {}
+            return resEntryId;
+        } catch (e) {
+            console.warn(`[dbService] remote createQuickFinancialEntry failed, falling back to localDbService`, e);
+            const id = generateId();
+            const coll = getLocalColl("quick_financial_entries");
+            coll.push({ ...entry, id, createdAt: new Date().toISOString() });
+            saveLocalColl("quick_financial_entries", coll);
+            return id;
+        }
     },
     async updateQuickFinancialEntry(oldEntry: any, newEntry: any) {
         if (isPlaceholderConfig) {
@@ -1566,7 +1841,25 @@ export const dbService = {
             }
             return;
         }
-        return remoteDbService.updateQuickFinancialEntry(oldEntry, newEntry);
+        try {
+            await withTimeout(remoteDbService.updateQuickFinancialEntry(oldEntry, newEntry));
+            try {
+                const coll = getLocalColl("quick_financial_entries");
+                const idx = coll.findIndex(e => e.id === oldEntry.id);
+                if (idx !== -1) {
+                    coll[idx] = { ...newEntry, id: oldEntry.id, updatedAt: new Date().toISOString() };
+                    saveLocalColl("quick_financial_entries", coll);
+                }
+            } catch (e) {}
+        } catch (e) {
+            console.warn(`[dbService] remote updateQuickFinancialEntry failed, falling back to localDbService`, e);
+            const coll = getLocalColl("quick_financial_entries");
+            const idx = coll.findIndex(e => e.id === oldEntry.id);
+            if (idx !== -1) {
+                coll[idx] = { ...newEntry, id: oldEntry.id, updatedAt: new Date().toISOString() };
+                saveLocalColl("quick_financial_entries", coll);
+            }
+        }
     },
     async deleteQuickFinancialEntry(entry: any) {
         if (isPlaceholderConfig) {
@@ -1578,6 +1871,26 @@ export const dbService = {
             }
             return;
         }
-        return remoteDbService.deleteQuickFinancialEntry(entry);
+        try {
+            await withTimeout(remoteDbService.deleteQuickFinancialEntry(entry));
+            try {
+                const coll = getLocalColl("quick_financial_entries");
+                const idx = coll.findIndex(e => e.id === entry.id);
+                if (idx !== -1) {
+                    coll[idx].recordStatus = 'deleted';
+                    saveLocalColl("quick_financial_entries", coll);
+                }
+            } catch (e) {}
+        } catch (e) {
+            console.warn(`[dbService] remote deleteQuickFinancialEntry failed, falling back to localDbService`, e);
+            try {
+                const coll = getLocalColl("quick_financial_entries");
+                const idx = coll.findIndex(e => e.id === entry.id);
+                if (idx !== -1) {
+                    coll[idx].recordStatus = 'deleted';
+                    saveLocalColl("quick_financial_entries", coll);
+                }
+            } catch (e) {}
+        }
     }
 };

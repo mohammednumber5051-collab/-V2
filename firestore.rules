@@ -158,5 +158,8 @@ service cloud.firestore {
     match /settings/{id} {
       allow read, write: if true;
     }
+    match /backups/{id} {
+      allow read, write: if true;
+    }
   }
 }
