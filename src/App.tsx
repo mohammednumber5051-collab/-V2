@@ -470,7 +470,7 @@ function AppContent() {
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 overflow-y-auto w-full relative bg-slate-50 dark:bg-[#0b0f19] pb-[calc(5.5rem+env(safe-area-inset-bottom,12px))] transition-colors duration-300">
+      <main className="flex-1 overflow-y-auto w-full relative bg-slate-50 dark:bg-[#0b0f19] pb-[calc(6.5rem+env(safe-area-inset-bottom,16px))] transition-colors duration-300">
         <div className="p-2.5 md:p-3.5 w-full max-w-5xl mx-auto min-h-full flex flex-col">
           <AnimatePresence mode="wait">
             <motion.div
@@ -490,7 +490,7 @@ function AppContent() {
       </main>
 
       {/* Global FAB */}
-      <div className="absolute bottom-[calc(4.5rem+env(safe-area-inset-bottom,12px))] left-6 z-50">
+      <div className="absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom,16px))] left-6 z-50">
         <AnimatePresence>
           {isFabMenuOpen && (
             <>
@@ -547,7 +547,10 @@ function AppContent() {
         
         <button 
           onClick={() => setIsFabMenuOpen(!isFabMenuOpen)}
-          className="w-14 h-14 bg-blue-600 dark:bg-blue-500 text-white rounded-2xl shadow-lg shadow-blue-500/30 flex items-center justify-center hover:bg-blue-700 dark:hover:bg-blue-600 hover:-translate-y-1 transition-all z-50 relative active:scale-95"
+          className={cn(
+            "w-14 h-14 bg-blue-600 dark:bg-blue-500 text-white rounded-2xl flex items-center justify-center hover:bg-blue-700 dark:hover:bg-blue-600 hover:-translate-y-1 transition-all z-50 relative active:scale-95",
+            isFabMenuOpen ? "shadow-lg shadow-blue-500/30" : "animate-soft-pulse"
+          )}
           id="global_fab"
         >
           <motion.div animate={{ rotate: isFabMenuOpen ? 45 : 0 }}>
@@ -558,7 +561,7 @@ function AppContent() {
 
       {/* Bottom Navigation */}
       {!isKeyboardOpen && (
-        <div className="min-h-[3.5rem] h-auto pb-[env(safe-area-inset-bottom,12px)] pt-1.5 bg-white dark:bg-[#131b2e] border-t border-slate-200 dark:border-slate-850 absolute bottom-0 left-0 right-0 z-40 shadow-lg flex items-center justify-around px-1 transition-colors duration-300">
+        <div className="min-h-[3.5rem] h-auto pb-[calc(env(safe-area-inset-bottom,16px)+12px)] pt-2 bg-white dark:bg-[#131b2e] border-t border-slate-200 dark:border-slate-850 absolute bottom-0 left-0 right-0 z-40 shadow-lg flex items-center justify-around px-1 transition-colors duration-300">
           {bottomNavItems.filter(item => hasPermission(currentUser, item.id)).map(item => (
             <button
               key={item.id}

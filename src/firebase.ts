@@ -1,12 +1,25 @@
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, doc, getDocFromServer, enableIndexedDbPersistence, disableNetwork } from "firebase/firestore";
+import { initializeFirestore, getFirestore, doc, getDocFromServer, enableIndexedDbPersistence, disableNetwork } from "firebase/firestore";
 import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signInAnonymously } from "firebase/auth";
 import config from "../firebase-applet-config.json";
 
 const app = initializeApp(config);
-export const db = initializeFirestore(app, {
-    experimentalForceLongPolling: true,
-}, config.firestoreDatabaseId);
+
+let firestoreDb: any;
+try {
+    firestoreDb = initializeFirestore(app, {
+        experimentalForceLongPolling: true,
+    }, config.firestoreDatabaseId);
+} catch (e) {
+    console.warn("initializeFirestore failed or was already called, falling back to getFirestore:", e);
+    try {
+        firestoreDb = getFirestore(app, config.firestoreDatabaseId);
+    } catch (err) {
+        console.error("Critical: Failed to initialize Firestore with getFirestore fallback as well:", err);
+    }
+}
+
+export const db = firestoreDb;
 
 // Enable Offline Persistence for Android/Mobile support
 if (typeof window !== 'undefined') {

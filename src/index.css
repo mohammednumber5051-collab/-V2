@@ -102,6 +102,36 @@ input, select, textarea {
   animation: fadeInSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+@keyframes soft-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45), 0 10px 15px -3px rgba(59, 130, 246, 0.3);
+  }
+  50% {
+    transform: scale(1.04);
+    box-shadow: 0 0 0 14px rgba(59, 130, 246, 0), 0 10px 15px -3px rgba(59, 130, 246, 0.3);
+  }
+}
+
+@keyframes soft-pulse-dark {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.55), 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+  }
+  50% {
+    transform: scale(1.04);
+    box-shadow: 0 0 0 14px rgba(59, 130, 246, 0), 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+  }
+}
+
+.animate-soft-pulse {
+  animation: soft-pulse 2.2s infinite cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dark .animate-soft-pulse {
+  animation: soft-pulse-dark 2.2s infinite cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 #invoice_wrapper {
   position: relative !important;
   z-index: 10 !important;
