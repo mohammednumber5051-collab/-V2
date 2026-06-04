@@ -28,6 +28,7 @@ import { cn, hasPermission } from "./lib/utils";
 import { AppUser } from "./types";
 import { dbService } from "./services/db";
 import { authService } from "./services/authService";
+import { waitForAuth } from "./firebase";
 
 import { App as CapApp } from '@capacitor/app';
 import { Keyboard } from '@capacitor/keyboard';
@@ -191,7 +192,6 @@ function AppContent() {
     const checkSession = async () => {
       try {
         // Ensure Firebase Auth is ready (and anonymous login check performed)
-        const { waitForAuth } = await import("./firebase");
         await waitForAuth();
         
         const _currentUser = await authService.validateSession();

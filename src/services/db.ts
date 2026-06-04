@@ -1065,7 +1065,6 @@ const remoteDbService = {
                 updatedAt: new Date().toISOString()
             }).catch(async (e) => {
                 // fallback if doc doesn't exist
-                const { setDoc } = await import("firebase/firestore");
                 await setDoc(boxRef, {
                     balance: amount,
                     updatedAt: new Date().toISOString()

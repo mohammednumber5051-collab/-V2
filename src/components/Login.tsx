@@ -4,6 +4,8 @@ import { motion, AnimatePresence } from "motion/react";
 import { authService } from "../services/authService";
 import { AppUser } from "../types";
 import { cn } from "../lib/utils";
+import { waitForAuth } from "../firebase";
+import { dbService } from "../services/db";
 
 interface LoginProps {
     onLogin: (user: AppUser) => void;
@@ -32,7 +34,6 @@ export default function Login({ onLogin }: LoginProps) {
         const checkSetupAndLoadUsers = async () => {
             try {
                 // Ensure Firebase Auth is ready
-                const { waitForAuth } = await import("../firebase");
                 await waitForAuth();
                 
                 const res = await authService.initialize();
@@ -40,7 +41,6 @@ export default function Login({ onLogin }: LoginProps) {
                     setIsSetupMode(true);
                 } else {
                     // Fetch all users for selection
-                    const { dbService } = await import("../services/db");
                     const allUsers = await dbService.getAll("users") as AppUser[];
                     // Only show active users in the selection list
                     const active = allUsers.filter(u => u.isActive !== false);
