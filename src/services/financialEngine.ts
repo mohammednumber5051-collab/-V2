@@ -35,8 +35,15 @@ export class FinancialEngine {
             const costAmount = (invoice.items || []).reduce((acc: number, item: any) => acc + ((item.purchasePrice || 0) * item.quantity), 0);
             agg.salesTotal = netAmount * mult;
             agg.profitsTotal = (netAmount - costAmount) * mult;
-            agg.receivablesChange = remaining * mult;
-            agg.cashBalanceChange = paid * mult;
+            agg.receivablesChange = netAmount * mult; // Initially increase by full amount
+            
+            if (paid > 0) {
+                agg.receiptsTotal = paid * mult;
+                agg.receivablesChange = (netAmount - paid) * mult; // Adjust receivables by subtracting payment
+                agg.cashBalanceChange = paid * mult;
+            } else {
+                agg.receivablesChange = netAmount * mult;
+            }
 
             // 1. Sales Revenue Transaction
             transactions.push({
@@ -45,7 +52,7 @@ export class FinancialEngine {
                 sourceId: invoice.id || 'new',
                 amount: netAmount,
                 currency: invoice.currency,
-                description: `إثبات فاتورة مبيعات - ${invoice.referenceNumber || invoice.id}`,
+                description: `إثبات فاتورة مبيعات - ${invoice.invoiceNumber || invoice.referenceNumber || invoice.id}`,
                 partnerId: invoice.partnerId,
                 partnerName: invoice.partnerName,
                 debit: netAmount,
@@ -63,7 +70,7 @@ export class FinancialEngine {
                     sourceId: invoice.id || 'new',
                     amount: paid,
                     currency: invoice.currency,
-                    description: `دفعة من فاتورة مبيعات - ${invoice.referenceNumber || invoice.id}`,
+                    description: `دفعة من فاتورة مبيعات - ${invoice.invoiceNumber || invoice.referenceNumber || invoice.id}`,
                     boxId: invoice.boxId,
                     partnerId: invoice.partnerId,
                     partnerName: invoice.partnerName,
@@ -79,8 +86,15 @@ export class FinancialEngine {
             cashBoxBalanceChange = -paid;
 
             agg.purchasesTotal = netAmount * mult;
-            agg.payablesChange = remaining * mult;
-            agg.cashBalanceChange = -paid * mult;
+            agg.payablesChange = netAmount * mult;
+
+            if (paid > 0) {
+                agg.paymentsTotal = paid * mult;
+                agg.payablesChange = (netAmount - paid) * mult;
+                agg.cashBalanceChange = -paid * mult;
+            } else {
+                agg.payablesChange = netAmount * mult;
+            }
 
             // 1. Purchase Record
             transactions.push({
@@ -89,7 +103,7 @@ export class FinancialEngine {
                 sourceId: invoice.id || 'new',
                 amount: netAmount,
                 currency: invoice.currency,
-                description: `إثبات فاتورة مشتريات - ${invoice.referenceNumber || invoice.id}`,
+                description: `إثبات فاتورة مشتريات - ${invoice.invoiceNumber || invoice.referenceNumber || invoice.id}`,
                 partnerId: invoice.partnerId,
                 partnerName: invoice.partnerName,
                 debit: 0,
@@ -106,7 +120,7 @@ export class FinancialEngine {
                     sourceId: invoice.id || 'new',
                     amount: paid,
                     currency: invoice.currency,
-                    description: `سداد دفعة لفاتورة مشتريات - ${invoice.referenceNumber || invoice.id}`,
+                    description: `سداد دفعة لفاتورة مشتريات - ${invoice.invoiceNumber || invoice.referenceNumber || invoice.id}`,
                     boxId: invoice.boxId,
                     partnerId: invoice.partnerId,
                     partnerName: invoice.partnerName,
@@ -131,7 +145,15 @@ export class FinancialEngine {
         const paid = entry.paidAmount || 0;
         const remaining = entry.remainingAmount || 0;
         
-        let partnerBalanceChange = remaining;
+        let partnerBalanceChange = 0;
+        if (entry.entryType === 'manual_sale' || entry.entryType === 'manual_purchase') {
+            partnerBalanceChange = remaining;
+        } else if (entry.entryType === 'receipt' || entry.entryType === 'payment') {
+            partnerBalanceChange = -entry.netAmount;
+        } else {
+            partnerBalanceChange = remaining;
+        }
+
         let cashBoxBalanceChange = paid;
 
         const transType: TransactionType = 
@@ -176,15 +198,20 @@ export class FinancialEngine {
         const mult = isReversion ? -1 : 1;
         
         if (transType === 'قبض') {
-            agg.receiptsTotal = entry.netAmount * mult;
-            agg.receivablesChange = remaining * mult;
+            if (entry.entryType === 'manual_sale') {
+                agg.salesTotal = entry.netAmount * mult;
+                agg.profitsTotal = entry.netAmount * mult; // Assuming 100% profit for manual entries
+            } else {
+                agg.receiptsTotal = entry.netAmount * mult;
+            }
+            agg.receivablesChange = partnerBalanceChange * mult;
             agg.cashBalanceChange = paid * mult;
         } else {
             agg.paymentsTotal = entry.netAmount * mult;
             if (entry.entryType === 'expense') {
                (agg as any).expensesTotal = entry.netAmount * mult;
             } else {
-               agg.payablesChange = remaining * mult;
+               agg.payablesChange = partnerBalanceChange * mult;
             }
             cashBoxBalanceChange = -paid;
             agg.cashBalanceChange = -paid * mult;

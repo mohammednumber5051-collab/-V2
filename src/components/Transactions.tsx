@@ -18,8 +18,12 @@ import {
   Edit2,
   Trash2,
   Printer,
+  ChevronDown,
+  ChevronUp
 } from "lucide-react";
 import { dbService } from "../services/db";
+import { FinancialMovement, Invoice, Voucher, QuickFinancialEntry } from "../types";
+import { syncEngine } from "../services/syncEngine";
 import {
   Transaction,
   Customer,
@@ -28,13 +32,24 @@ import {
   CashBox,
   Currency,
 } from "../types";
-import { motion, AnimatePresence } from "motion/react";
-import { cn } from "../lib/utils";
+import { motion, AnimatePresence, useDragControls } from "motion/react";
+import { cn, hasPermission } from "../lib/utils";
+import PrintPreviewModal from "./PrintPreviewModal";
 
 type Tab = "transactions" | "boxes" | "transfers";
 
-export default function Transactions({ currentUser: propCurrentUser }: { currentUser?: any }) {
+export default function Transactions({ currentUser: propCurrentUser, onNavigate }: { currentUser?: any, onNavigate?: (page: string) => void }) {
   const [activeTab, setActiveTab] = useState<Tab>("transactions");
+  const [movements, setMovements] = useState<FinancialMovement[]>([]);
+  
+  // Filters
+  const [filterStartDate, setFilterStartDate] = useState('');
+  const [filterEndDate, setFilterEndDate] = useState('');
+  const [filterRecordType, setFilterRecordType] = useState('all');
+  const [filterPaymentType, setFilterPaymentType] = useState('all');
+  const [filterUser, setFilterUser] = useState('all');
+  const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+  
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [lastDoc, setLastDoc] = useState<any>(null);
   const [hasMore, setHasMore] = useState(true);
@@ -49,8 +64,20 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
     suppliers: Supplier[];
   }>({ customers: [], suppliers: [] });
   const [currentUser, setCurrentUser] = useState<AppUser | null>(propCurrentUser || null);
+  const [viewingBoxMovements, setViewingBoxMovements] = useState<FinancialMovement[]>([]);
+  const [isLoadingBoxTransactions, setIsLoadingBoxTransactions] = useState<boolean>(false);
+  const [refreshBoxTrigger, setRefreshBoxTrigger] = useState<number>(0);
+
+  // Print Preview State
+  const [printPreview, setPrintPreview] = useState<{
+    isOpen: boolean;
+    html: string;
+    title: string;
+    size: 'a4' | 'thermal';
+  }>({ isOpen: false, html: '', title: '', size: 'a4' });
 
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const modalDragControls = useDragControls();
   const [modalType, setModalType] = useState<
     "transaction" | "box" | "transfer"
   >("transaction");
@@ -93,7 +120,44 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
     }
     loadStaticData();
     loadTransactions(true);
+
+    const savedTab = localStorage.getItem("transactions_active_tab");
+    if (savedTab === "boxes" || savedTab === "transfers" || savedTab === "transactions") {
+      setActiveTab(savedTab as Tab);
+      localStorage.removeItem("transactions_active_tab");
+    }
+
+    const unsubscribe = syncEngine.subscribe('DATA_CHANGED', () => {
+      loadStaticData();
+      loadTransactions(true);
+      setRefreshBoxTrigger(prev => prev + 1);
+    });
+    return unsubscribe;
   }, [propCurrentUser]);
+
+  useEffect(() => {
+    if (!viewingBox) {
+      setViewingBoxMovements([]);
+      return;
+    }
+    setIsLoadingBoxTransactions(true);
+    try {
+      const filtered = movements.filter(m => m.boxChanges && m.boxChanges[viewingBox.id] !== undefined);
+      filtered.sort((a, b) => b.dateObj.getTime() - a.dateObj.getTime());
+      setViewingBoxMovements(filtered);
+    } catch (err) {
+      console.error("Failed to load box movements", err);
+    } finally {
+      setIsLoadingBoxTransactions(false);
+    }
+  }, [viewingBox, refreshBoxTrigger, movements]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    if (activeTab === 'boxes' && !hasPermission(currentUser, 'cash_boxes')) {
+      setActiveTab('transactions');
+    }
+  }, [activeTab, currentUser]);
 
   const loadStaticData = async () => {
       const [boxes, userData, customers, suppliers] = await Promise.all([
@@ -111,18 +175,139 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
   };
 
   const loadTransactions = async (reset: boolean = false) => {
-    if (reset) {
-        setTransactions([]);
-        setLastDoc(null);
-    } else {
-        setIsLoadingMore(true);
-    }
-    
+    setIsLoadingMore(true);
     try {
-        const res = await dbService.getPaginated("transactions", 50, reset ? null : lastDoc, []);
-        setTransactions(prev => reset ? res.data as Transaction[] : [...prev, ...res.data as Transaction[]]);
-        setLastDoc(res.lastDoc);
-        setHasMore(res.hasMore);
+        const [invs, vchs, qes, txs, boxes] = await Promise.all([
+            dbService.getAll("invoices"),
+            dbService.getAll("vouchers"),
+            dbService.getAll("quickEntries"),
+            dbService.getAll("transactions"),
+            dbService.getAll("cashBoxes")
+        ]);
+
+        const boxMap = new Map((boxes as any[]).map(b => [b.id, b.name]));
+
+        const allMovements: FinancialMovement[] = [];
+
+        (invs as Invoice[]).forEach(inv => {
+            if (inv.recordStatus === 'deleted') return;
+            const changes: Record<string, number> = {};
+            if (inv.boxId && inv.paid && inv.paid > 0) {
+                const type = inv.type || 'sale';
+                const baseType = type.replace('_return', '');
+                let boxChange = baseType === 'sale' ? inv.paid : -inv.paid;
+                if (type.includes('return')) boxChange = -boxChange;
+                changes[inv.boxId] = boxChange;
+            }
+            allMovements.push({
+                id: `inv-${inv.id}`,
+                originalId: inv.id!,
+                source: 'invoice',
+                recordType: inv.type === 'sale' ? 'فاتورة بيع' : 'فاتورة شراء',
+                paymentType: inv.paymentType === 'نقدآ' ? 'نقدا' : inv.paymentType === 'آجل' ? 'اجل' : 'جزئي',
+                partnerName: inv.partnerName || 'عام',
+                totalAmount: inv.total || 0,
+                discount: inv.discount || 0,
+                paidAmount: inv.paid || 0,
+                remainingAmount: (inv.total || 0) - (inv.discount || 0) - (inv.paid || 0),
+                boxName: inv.boxId ? (boxMap.get(inv.boxId) || '') : '',
+                boxChanges: changes,
+                createdBy: (inv as any).createdBy || 'النظام',
+                createdAt: inv.createdAt,
+                dateObj: new Date(inv.createdAt),
+                originalRecord: inv
+            });
+        });
+
+        (vchs as Voucher[]).forEach(vch => {
+            if (vch.recordStatus === 'deleted') return;
+            const changes: Record<string, number> = {};
+            if (vch.boxId && vch.amount) {
+                changes[vch.boxId] = vch.type === 'receipt' ? vch.amount : -vch.amount;
+            }
+            allMovements.push({
+                id: `vch-${vch.id}`,
+                originalId: vch.id!,
+                source: 'voucher',
+                recordType: vch.type === 'receipt' ? 'سند قبض' : 'سند صرف',
+                paymentType: 'نقدا',
+                partnerName: vch.partnerName || 'عام',
+                totalAmount: vch.amount || 0,
+                discount: 0,
+                paidAmount: vch.amount || 0,
+                remainingAmount: 0,
+                boxName: vch.boxName || '',
+                boxChanges: changes,
+                createdBy: vch.createdBy || 'النظام',
+                createdAt: vch.createdAt,
+                dateObj: new Date(vch.createdAt),
+                originalRecord: vch
+            });
+        });
+
+        (qes as QuickFinancialEntry[]).forEach(qe => {
+            if (qe.recordStatus === 'deleted') return;
+            const changes: Record<string, number> = {};
+            if (qe.cashBoxId && qe.paidAmount && qe.paidAmount > 0) {
+                let boxChange = (qe.entryType === 'manual_sale' || qe.entryType === 'receipt') ? qe.paidAmount : -qe.paidAmount;
+                changes[qe.cashBoxId] = boxChange;
+            }
+            allMovements.push({
+                id: `qe-${qe.id}`,
+                originalId: qe.id!,
+                source: 'quickEntry',
+                recordType: qe.entryType === 'manual_sale' ? 'فاتورة بيع (سريع)' : qe.entryType === 'manual_purchase' ? 'فاتورة شراء (سريع)' : qe.entryType === 'receipt' ? 'سند قبض (سريع)' : qe.entryType === 'payment' ? 'سند صرف (سريع)' : 'تسوية',
+                paymentType: qe.paymentStatus === 'مدفوع' ? 'نقدا' : qe.paymentStatus === 'آجل' ? 'اجل' : 'جزئي',
+                partnerName: qe.partnerName || 'عام',
+                totalAmount: qe.amount || 0,
+                discount: qe.discount || 0,
+                paidAmount: qe.paidAmount || 0,
+                remainingAmount: qe.remainingAmount || 0,
+                boxName: qe.cashBoxName || '',
+                boxChanges: changes,
+                createdBy: qe.createdBy || 'النظام',
+                createdAt: qe.createdAt,
+                dateObj: new Date(qe.createdAt),
+                originalRecord: qe
+            });
+        });
+
+        (txs as Transaction[]).forEach(tx => {
+            if (tx.recordStatus === 'deleted') return;
+            if (tx.sourceId) return; // Skip if it's from another document
+            
+            const changes: Record<string, number> = {};
+            if (tx.type === 'تحويل') {
+                if (tx.fromBoxId) changes[tx.fromBoxId] = -(tx.amount || 0);
+                if (tx.toBoxId) changes[tx.toBoxId] = (tx.amount || 0);
+            } else if (tx.boxId) {
+                changes[tx.boxId] = tx.type === 'قبض' ? (tx.amount || 0) : -(tx.amount || 0);
+            }
+            
+            allMovements.push({
+                id: `tx-${tx.id}`,
+                originalId: tx.id!,
+                source: 'transaction',
+                recordType: tx.type === 'تحويل' ? 'تحويل' : tx.type === 'قبض' ? 'سند قبض (قديم)' : 'سند صرف (قديم)',
+                paymentType: 'نقدا',
+                partnerName: tx.partnerName || 'عام',
+                totalAmount: tx.amount || 0,
+                discount: 0,
+                paidAmount: tx.amount || 0,
+                remainingAmount: 0,
+                boxName: tx.boxId ? (boxMap.get(tx.boxId) || '') : '',
+                boxChanges: changes,
+                createdBy: tx.createdBy || 'النظام',
+                createdAt: tx.createdAt,
+                dateObj: new Date(tx.createdAt),
+                originalRecord: tx
+            });
+        });
+
+        allMovements.sort((a, b) => b.dateObj.getTime() - a.dateObj.getTime());
+        setMovements(allMovements);
+        setTransactions(txs as Transaction[]);
+
     } catch(err) {
         console.error("Failed to load transactions", err);
     } finally {
@@ -140,8 +325,32 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
 
   const confirmDeleteTransDef = async () => {
     if (!transToDelete) return;
+    if (!hasPermission(currentUser, 'global_delete')) {
+      alert("عذراً، لا تملك صلاحية حذف السندات المالية.");
+      setTransToDelete(null);
+      return;
+    }
     setIsSaving(true);
+    
     try {
+        if (transToDelete.type === 'قبض' && transToDelete.boxId) {
+            const box = cashBoxes.find(b => b.id === transToDelete.boxId);
+            if (box && ((box.balance || 0) - transToDelete.amount!) < 0) {
+                alert("لا يمكن حذف سند القبض لأنه سيؤدي إلى رصيد سالب في الصندوق.");
+                setIsSaving(false);
+                setTransToDelete(null);
+                return;
+            }
+        } else if (transToDelete.type === 'تحويل' && transToDelete.toBoxId) {
+            const box = cashBoxes.find(b => b.id === transToDelete.toBoxId);
+            if (box && ((box.balance || 0) - transToDelete.amount!) < 0) {
+                alert("لا يمكن حذف التحويل لأنه سيؤدي إلى رصيد سالب في الصندوق المستلم.");
+                setIsSaving(false);
+                setTransToDelete(null);
+                return;
+            }
+        }
+
       await dbService.deleteTransactionData(transToDelete);
       setTransToDelete(null);
       loadData();
@@ -172,159 +381,143 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
   };
 
   const openEditBox = (box: CashBox) => {
-    const boxTransactions = transactions.filter((t) => t.boxId === box.id || t.fromBoxId === box.id || t.toBoxId === box.id);
-    const totalIn = boxTransactions.filter(t => (t.boxId === box.id && t.type === 'قبض') || (t.type === 'تحويل' && t.toBoxId === box.id)).reduce((acc, curr) => acc + curr.amount, 0);
-    const totalOut = boxTransactions.filter(t => (t.boxId === box.id && t.type === 'صرف') || (t.type === 'تحويل' && t.fromBoxId === box.id)).reduce((acc, curr) => acc + curr.amount, 0);
-    const initialBalance = (box.balance || 0) - totalIn + totalOut;
-
-    setBoxForm({ ...box, balance: initialBalance }); // We use balance to hold the "initial" balance
+    const initialBalance = box.initialBalance !== undefined ? box.initialBalance : box.balance || 0;
+    setBoxForm({ ...box, balance: initialBalance }); // We use balance to hold the "initial" balance in the form temporarily
     setModalType("box");
     setIsModalOpen(true);
   };
 
   const handlePrintStatement = () => {
         if (!viewingBox) return;
-
-        const boxTransactions = transactions
-            .filter((t) => t.boxId === viewingBox.id || t.fromBoxId === viewingBox.id || t.toBoxId === viewingBox.id)
+        const boxTransactions = [...viewingBoxMovements]
             .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()); // sort ascending for print report
-          
-        const totalIn = boxTransactions.filter(t => (t.boxId === viewingBox.id && t.type === 'قبض') || (t.type === 'تحويل' && t.toBoxId === viewingBox.id)).reduce((acc, curr) => acc + curr.amount, 0);
-        const totalOut = boxTransactions.filter(t => (t.boxId === viewingBox.id && t.type === 'صرف') || (t.type === 'تحويل' && t.fromBoxId === viewingBox.id)).reduce((acc, curr) => acc + curr.amount, 0);
-        const openingBalance = (viewingBox.balance || 0) - totalIn + totalOut;
-
-        const printWindow = window.open('', '_blank');
-        if (!printWindow) {
-            alert("يرجى السماح بالنوافذ المنبثقة لطباعة كشف الحساب");
-            return;
-        }
-
-        if (printFormat === 'pdf') {
-            printWindow.document.title = `كشف_حساب_الصندوق_${viewingBox.name.replace(/\s+/g, '_')}`;
-        } else {
-            printWindow.document.title = `تقرير كشف حساب صندوق - ${viewingBox.name}`;
-        }
-
+        
+        const totalIn = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] > 0) ? curr.boxChanges[viewingBox.id] : 0), 0);
+        const totalOut = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] < 0) ? Math.abs(curr.boxChanges[viewingBox.id]) : 0), 0);
+        const openingBalance = viewingBox.initialBalance !== undefined ? viewingBox.initialBalance : (viewingBox.balance || 0) - totalIn + totalOut;
+        
         const dateStr = new Date().toLocaleDateString('ar-YE', { 
             year: 'numeric', month: '2-digit', day: '2-digit'
         });
 
         let printHTML = "";
-
+        
         if (printFormat === 'thermal') {
             printHTML = `
-                <!DOCTYPE html>
-                <html dir="rtl" lang="ar">
-                <head>
-                    <meta charset="utf-8">
-                    <title>كشف حساب حراري - ${viewingBox.name}</title>
-                    <style>
-                        @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap');
-                        @page { size: 80mm auto; margin: 0; }
-                        body { font-family: 'Cairo', sans-serif; color: #000; padding: 4mm; width: 72mm; direction: rtl; font-size: 11px; margin: 0;}
-                        .thermal-table { width: 100%; border-collapse: collapse; font-size: 9px; margin-top:10px; }
-                        .thermal-table th { border-bottom: 1px dashed #000; padding: 3px 1px; text-align: right; }
-                        .thermal-table td { padding: 4px 1px; border-bottom: 1px dashed #e2e8f0; }
-                        .fin-box { border: 1px solid #000; padding: 5px; margin: 5px 0; border-radius:4px; font-size: 10px;}
-                        .row { display: flex; justify-content: space-between; margin-bottom: 2px;}
-                    </style>
-                </head>
-                <body>
-                    <div style="text-align:center; border-bottom: 2px dashed #000; padding-bottom: 5px; margin-bottom: 5px;">
-                        <div style="font-size: 14px; font-weight: 900;">مركز البصريات الحديث المتطور</div>
-                        <div style="font-size: 10px; font-weight: bold;">كشف حساب صندوق</div>
-                    </div>
-                    <div class="row"><span>الصندوق:</span> <strong>${viewingBox.name}</strong></div>
-                    <div class="row"><span>الرصيد الافتتاحي:</span> <strong>${(openingBalance || 0).toLocaleString()} ${viewingBox.currency}</strong></div>
-                    <div class="row" style="border-top:1px dashed #000; padding-top:2px; margin-top: 2px;">
-                        <span>الرصيد الحالي:</span> <strong>${(viewingBox.balance || 0).toLocaleString()} ${viewingBox.currency}</strong>
-                    </div>
-                    <table class="thermal-table">
-                        <thead><tr><th>التاريخ</th><th>الحركة</th><th style="text-align: left;">المبلغ</th></tr></thead>
-                        <tbody>
-                            ${boxTransactions.map(item => {
-                                const isIncome = (item.type === 'قبض' && item.boxId === viewingBox.id) || (item.type === 'تحويل' && item.toBoxId === viewingBox.id);
-                                return `<tr>
-                                    <td>${new Date(item.createdAt).toLocaleDateString('ar-YE', {month: 'numeric', day: 'numeric'})}</td>
-                                    <td>${item.type}</td>
-                                    <td style="text-align: left; font-weight: bold; font-family: monospace;">${isIncome ? '+' : '-'}${(item.amount || 0).toLocaleString()}</td>
-                                </tr>`}).join('')}
-                        </tbody>
-                    </table>
-                    <script>window.onload=()=>{setTimeout(()=>{window.print();window.close();},500);};</script>
-                </body>
-                </html>
+                <style>
+                    .thermal-table { width: 100%; border-collapse: collapse; font-size: 9px; margin-top:10px; }
+                    .thermal-table th { border-bottom: 1px dashed #000; padding: 3px 1px; text-align: right; }
+                    .thermal-table td { padding: 4px 1px; border-bottom: 1px dashed #e2e8f0; }
+                    .fin-box { border: 1px solid #000; padding: 5px; margin: 5px 0; border-radius:4px; font-size: 10px;}
+                    .row { display: flex; justify-content: space-between; margin-bottom: 2px;}
+                </style>
+                <div style="text-align:center; border-bottom: 2px dashed #000; padding-bottom: 5px; margin-bottom: 5px;">
+                    <div style="font-size: 14px; font-weight: 900;">مركز البصريات الحديث المتطور</div>
+                    <div style="font-size: 10px; font-weight: bold;">كشف حساب صندوق</div>
+                </div>
+                <div class="row"><span>الصندوق:</span> <strong>${viewingBox.name}</strong></div>
+                <div class="row"><span>الرصيد الافتتاحي:</span> <strong>${(openingBalance || 0).toLocaleString()} ${viewingBox.currency}</strong></div>
+                <div class="row" style="border-top:1px dashed #000; padding-top:2px; margin-top: 2px;">
+                    <span>الرصيد الحالي:</span> <strong>${(viewingBox.balance || 0).toLocaleString()} ${viewingBox.currency}</strong>
+                </div>
+                <table class="thermal-table">
+                    <thead><tr><th>التاريخ</th><th>الحركة</th><th style="text-align: left;">المبلغ</th></tr></thead>
+                    <tbody>
+                        ${boxTransactions.map(item => {
+                            const change = item.boxChanges ? (item.boxChanges[viewingBox.id] || 0) : 0;
+                            if (change === 0) return '';
+                            const isIncome = change > 0;
+                            return `<tr>
+                                <td>${new Date(item.createdAt).toLocaleDateString('ar-YE', {month: 'numeric', day: 'numeric'})}</td>
+                                <td>${item.recordType}</td>
+                                <td style="text-align: left; font-weight: bold; font-family: monospace;">${isIncome ? '+' : '-'}${Math.abs(change).toLocaleString()}</td>
+                            </tr>`}).join('')}
+                    </tbody>
+                </table>
+                <div style="margin-top: 15px; text-align: center; font-size: 8px; color: #475569; font-weight: bold;">
+                    <div>Generated by ASSAR Optical Accounting</div>
+                    <div>Designed & Developed By Mohammed Assubaihi | 779391682</div>
+                </div>
             `;
         } else {
             let currentBalanceIter = openingBalance;
+            
             const timelineRows = boxTransactions.map(item => {
-                const isIncome = (item.type === 'قبض' && item.boxId === viewingBox.id) || (item.type === 'تحويل' && item.toBoxId === viewingBox.id);
-                if (isIncome) currentBalanceIter += item.amount;
-                else currentBalanceIter -= item.amount;
+                const change = item.boxChanges ? (item.boxChanges[viewingBox.id] || 0) : 0;
+                if (change === 0) return '';
+                const isIncome = change > 0;
+                if (isIncome) currentBalanceIter += change;
+                else currentBalanceIter -= Math.abs(change);
+                
                 return `<tr>
                     <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: bold; font-size: 12px;">${new Date(item.createdAt).toLocaleDateString('ar-YE')}</td>
-                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold; color: ${isIncome ? '#059669' : '#e11d48'};">${item.type}</td>
-                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: 800; font-size: 13px; text-align: left;">${isIncome ? '+' : '-'}${(item.amount || 0).toLocaleString()}</td>
-                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; color: #475569; font-size: 11px;">${item.description || '-'} ${item.partnerName ? '<br><span style="font-weight:bold; color:#1e293b;">الطرف: ' + item.partnerName + '</span>' : ''}</td>
-                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: 800; font-size: 13px; text-align: left; color: #0f172a;">${currentBalanceIter.toLocaleString()} ${item.currency}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold; color: ${isIncome ? '#059669' : '#e11d48'};">${item.recordType}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: 800; font-size: 13px; text-align: left;">${isIncome ? '+' : '-'}${Math.abs(change).toLocaleString()}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; color: #475569; font-size: 11px;">${item.originalRecord?.description || '-'} ${item.partnerName ? '<br><span style="font-weight:bold; color:#1e293b;">الطرف: ' + item.partnerName + '</span>' : ''}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: 800; font-size: 13px; text-align: left; color: #0f172a;">${currentBalanceIter.toLocaleString()} ${item.originalRecord?.currency || viewingBox.currency}</td>
                 </tr>`}).join('');
 
             printHTML = `
-                <!DOCTYPE html>
-                <html dir="rtl" lang="ar">
-                <head>
-                    <meta charset="utf-8"><title>تقرير كشف حساب - ${viewingBox.name}</title>
-                    <style>
-                        @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap');
-                        body { font-family: 'Cairo', sans-serif; color: #1e293b; padding: 35px; direction: rtl; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-                        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #1e3a8a; padding-bottom: 15px; margin-bottom: 25px; }
-                        .info-grid { display: grid; grid-template-cols: 1fr 1fr; gap: 15px; margin-bottom: 25px; font-size: 12px; }
-                        .info-item { background: #f8fafc; padding: 10px 14px; border-radius: 8px; border: 1px solid #e2e8f0; }
-                        .fin-grid { display: grid; grid-template-cols: repeat(4, 1fr); gap: 15px; margin-bottom: 25px; text-align: center; }
-                        .fin-card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; }
-                        .table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }
-                        .table th { background-color: #f1f5f9; color: #475569; font-weight: 800; text-align: right; padding: 10px; border-bottom: 2px solid #cbd5e1; }
-                    </style>
-                </head>
-                <body>
-                    <div class="header">
-                        <div><div style="font-size:20px; font-weight:900; color:#1e3a8a;">مركز البصريات الحديث المتطور</div>
-                        <div style="font-size:18px; font-weight:800;">تقرير كشف حساب صندوق مالي</div></div>
-                        <div style="font-size:11px; font-weight:bold; color:#64748b;">تاريخ الإصدار: ${dateStr}</div>
-                    </div>
-                    <div class="info-grid">
-                        <div class="info-item"><strong>اسم الصندوق:</strong> <span style="font-size:13px; font-weight:800; color:#0f172a;">${viewingBox.name}</span></div>
-                        <div class="info-item"><strong>أمين الصندوق:</strong> <span style="font-weight:bold; color:#1e3a8a;">${viewingBox.userName || 'غير محدد'}</span></div>
-                        <div class="info-item"><strong>العملة:</strong> <span style="font-family:monospace; font-size:12px; font-weight:bold;">${viewingBox.currency}</span></div>
-                    </div>
-                    <div class="fin-grid">
-                        <div class="fin-card"><div style="font-size:10px; font-weight:bold;">الرصيد الافتتاحي</div><div style="font-size:15px; font-weight:900; color:#ea580c; font-family:monospace;">${(openingBalance || 0).toLocaleString()}</div></div>
-                        <div class="fin-card"><div style="font-size:10px; font-weight:bold;">وارد (المقبوضات)</div><div style="font-size:15px; font-weight:900; color:#059669; font-family:monospace;">${(totalIn || 0).toLocaleString()}</div></div>
-                        <div class="fin-card"><div style="font-size:10px; font-weight:bold;">صادر (المصروفات)</div><div style="font-size:15px; font-weight:900; color:#e11d48; font-family:monospace;">${(totalOut || 0).toLocaleString()}</div></div>
-                        <div class="fin-card" style="background:#f8fafc;"><div style="font-size:10px; font-weight:bold;">الرصيد المتاح</div><div style="font-size:15px; font-weight:900; color:#1e3a8a; font-family:monospace;">${(viewingBox.balance || 0).toLocaleString()}</div></div>
-                    </div>
-                    <table class="table">
-                        <thead><tr><th>التاريخ</th><th>الحركة</th><th style="text-align: left;">المبلغ</th><th>البيان والتفاصيل</th><th style="text-align: left;">الرصيد</th></tr></thead>
-                        <tbody>
-                            ${openingBalance !== 0 ? `<tr style="background:#fef3c7;"><td colspan="4" style="padding:10px; font-weight:bold; font-size:12px; color:#92400e;">الرصيد الافتتاحي أول المدة</td><td style="padding:10px; font-family:monospace; font-weight:900; font-size:13px; text-align:left; color:#92400e;">${openingBalance.toLocaleString()} ${viewingBox.currency}</td></tr>` : ''}
-                            ${timelineRows || '<tr><td colspan="5" style="text-align:center; padding:20px;">لا يوجد حركات مسجلة.</td></tr>'}
-                        </tbody>
-                    </table>
-                    <script>window.onload=()=>{setTimeout(()=>{window.print();window.close();},500);};</script>
-                </body>
-                </html>
+                <style>
+                    .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #1e3a8a; padding-bottom: 15px; margin-bottom: 25px; }
+                    .info-grid { display: grid; grid-template-cols: 1fr 1fr; gap: 15px; margin-bottom: 25px; font-size: 12px; }
+                    .info-item { background: #f8fafc; padding: 10px 14px; border-radius: 8px; border: 1px solid #e2e8f0; }
+                    .fin-grid { display: grid; grid-template-cols: repeat(4, 1fr); gap: 15px; margin-bottom: 25px; text-align: center; }
+                    .fin-card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; }
+                    .table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }
+                    .table th { background-color: #f1f5f9; color: #475569; font-weight: 800; text-align: right; padding: 10px; border-bottom: 2px solid #cbd5e1; }
+                </style>
+                <div class="header">
+                    <div><div style="font-size:20px; font-weight:900; color:#1e3a8a;">مركز البصريات الحديث المتطور</div>
+                    <div style="font-size:18px; font-weight:800;">تقرير كشف حساب صندوق مالي</div></div>
+                    <div style="font-size:11px; font-weight:bold; color:#64748b;">تاريخ الإصدار: ${dateStr}</div>
+                </div>
+                <div class="info-grid">
+                    <div class="info-item"><strong>اسم الصندوق:</strong> <span style="font-size:13px; font-weight:800; color:#0f172a;">${viewingBox.name}</span></div>
+                    <div class="info-item"><strong>أمين الصندوق:</strong> <span style="font-weight:bold; color:#1e3a8a;">${viewingBox.userName || 'غير محدد'}</span></div>
+                    <div class="info-item"><strong>العملة:</strong> <span style="font-family:monospace; font-size:12px; font-weight:bold;">${viewingBox.currency}</span></div>
+                </div>
+                <div class="fin-grid">
+                    <div class="fin-card"><div style="font-size:10px; font-weight:bold;">الرصيد الافتتاحي</div><div style="font-size:15px; font-weight:900; color:#ea580c; font-family:monospace;">${(openingBalance || 0).toLocaleString()}</div></div>
+                    <div class="fin-card"><div style="font-size:10px; font-weight:bold;">وارد (المقبوضات)</div><div style="font-size:15px; font-weight:900; color:#059669; font-family:monospace;">${(totalIn || 0).toLocaleString()}</div></div>
+                    <div class="fin-card"><div style="font-size:10px; font-weight:bold;">صادر (المصروفات)</div><div style="font-size:15px; font-weight:900; color:#e11d48; font-family:monospace;">${(totalOut || 0).toLocaleString()}</div></div>
+                    <div class="fin-card" style="background:#f8fafc;"><div style="font-size:10px; font-weight:bold;">الرصيد المتاح</div><div style="font-size:15px; font-weight:900; color:#1e3a8a; font-family:monospace;">${(viewingBox.balance || 0).toLocaleString()}</div></div>
+                </div>
+                <table class="table">
+                    <thead><tr><th>التاريخ</th><th>الحركة</th><th style="text-align: left;">المبلغ</th><th>البيان والتفاصيل</th><th style="text-align: left;">الرصيد</th></tr></thead>
+                    <tbody>
+                        ${openingBalance !== 0 ? `<tr style="background:#fef3c7;"><td colspan="4" style="padding:10px; font-weight:bold; font-size:12px; color:#92400e;">الرصيد الافتتاحي أول المدة</td><td style="padding:10px; font-family:monospace; font-weight:900; font-size:13px; text-align:left; color:#92400e;">${openingBalance.toLocaleString()} ${viewingBox.currency}</td></tr>` : ''}
+                        ${timelineRows || '<tr><td colspan="5" style="text-align:center; padding:20px;">لا يوجد حركات مسجلة.</td></tr>'}
+                    </tbody>
+                </table>
+                <div style="margin-top: 40px; text-align: center; font-size: 10px; color: #64748b; font-weight: bold;">
+                    <div>Generated by ASSAR Optical Accounting</div>
+                    <div>Designed & Developed By Mohammed Assubaihi | Mobile: 779391682</div>
+                </div>
             `;
         }
-        printWindow.document.open();
-        printWindow.document.write(printHTML);
-        printWindow.document.close();
+
+        setPrintPreview({
+            isOpen: true,
+            html: printHTML,
+            title: `كشف حساب صندوق - ${viewingBox.name}`,
+            size: printFormat === 'thermal' ? 'thermal' : 'a4'
+        });
   };
 
   const handleDeleteTrans = (t: Transaction) => {
+    if (!hasPermission(currentUser, 'global_delete')) {
+      alert("عذراً، لا تملك صلاحية حذف السندات المالية.");
+      return;
+    }
     setTransToDelete(t);
   };
 
   const handleDeleteAllTrans = async () => {
+    if (!hasPermission(currentUser, 'global_delete')) {
+      alert("عذراً، لا تملك صلاحية حذف السندات المالية.");
+      return;
+    }
     if (
       !confirm(
         "تحذير: هل أنت متأكد من حذف جميع السندات المالية (سيتم استرجاع تأثيراتها على الأرصدة)؟",
@@ -345,6 +538,27 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
   const handleTransSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (transForm.amount! <= 0) return alert("مبلغ غير صحيح");
+    if (editingTransaction && !hasPermission(currentUser, 'edit_transaction')) {
+      alert("عذراً، لا تملك صلاحية تعديل السندات المالية.");
+      return;
+    }
+    
+    // Check if the transaction will result in negative cashbox balance
+    if (transForm.type === 'صرف' && transForm.boxId) {
+        const box = cashBoxes.find(b => b.id === transForm.boxId);
+        if (box) {
+            let futureBalance = (box.balance || 0) - transForm.amount!;
+            if (editingTransaction && editingTransaction.boxId === transForm.boxId) {
+                // Add back the old amount since we are updating it
+                futureBalance += editingTransaction.amount || 0;
+            }
+            if (futureBalance < 0) {
+                alert("رصيد الصندوق غير كاف لإتمام هذه العملية (لا يمكن أن يكون بالسالب)");
+                return;
+            }
+        }
+    }
+    
     setIsSaving(true);
     try {
       const partner = partners[
@@ -381,14 +595,35 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
         userName: selectedUser?.name || "غير محدد",
       };
 
+      if (!dataToSave.name || !dataToSave.name.trim()) {
+          alert("يرجى إدخال اسم الصندوق المالي");
+          setIsSaving(false);
+          return;
+      }
+
+      // Check for duplicate name
+      const duplicate = cashBoxes.find(b => 
+          b.name.trim().toLowerCase() === dataToSave.name.trim().toLowerCase() && 
+          b.id !== boxForm.id
+      );
+      if (duplicate) {
+          alert("عذراً، يوجد صندوق مالي آخر مسجل بنفس هذا الاسم بالفعل.");
+          setIsSaving(false);
+          return;
+      }
+
       if (boxForm.id) {
-          const boxTransactions = transactions.filter((t) => t.boxId === boxForm.id || t.fromBoxId === boxForm.id || t.toBoxId === boxForm.id);
-          const totalIn = boxTransactions.filter(t => (t.boxId === boxForm.id && t.type === 'قبض') || (t.type === 'تحويل' && t.toBoxId === boxForm.id)).reduce((acc, curr) => acc + curr.amount, 0);
-          const totalOut = boxTransactions.filter(t => (t.boxId === boxForm.id && t.type === 'صرف') || (t.type === 'تحويل' && t.fromBoxId === boxForm.id)).reduce((acc, curr) => acc + curr.amount, 0);
+          const oldBox = cashBoxes.find((b) => b.id === boxForm.id);
+          const oldInitial = oldBox?.initialBalance !== undefined ? oldBox.initialBalance : (oldBox?.balance || 0);
+          const newInitial = Number(dataToSave.balance || 0);
+          const diff = newInitial - oldInitial;
           
-          dataToSave.balance = (dataToSave.balance || 0) + totalIn - totalOut;
+          dataToSave.initialBalance = newInitial;
+          dataToSave.balance = (oldBox?.balance || 0) + diff;
           await dbService.update("cashBoxes", boxForm.id, dataToSave);
       } else {
+          dataToSave.initialBalance = Number(dataToSave.balance || 0);
+          dataToSave.balance = Number(dataToSave.balance || 0);
           await dbService.add("cashBoxes", dataToSave);
       }
       
@@ -406,6 +641,11 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
     if (transferForm.fromBoxId === transferForm.toBoxId)
       return alert("لا يمكن التحويل لنفس الصندوق");
     if (transferForm.amount <= 0) return alert("مبلغ غير صحيح");
+
+    const fromBox = cashBoxes.find(b => b.id === transferForm.fromBoxId);
+    if (fromBox && ((fromBox.balance || 0) - transferForm.amount) < 0) {
+        return alert("رصيد الصندوق المحول منه غير كافٍ لإتمام التحويل.");
+    }
 
     setIsSaving(true);
     try {
@@ -427,6 +667,13 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
 
   return (
     <div className="space-y-6">
+      <PrintPreviewModal 
+          isOpen={printPreview.isOpen}
+          onClose={() => setPrintPreview(prev => ({ ...prev, isOpen: false }))}
+          htmlContent={printPreview.html}
+          title={printPreview.title}
+          paperSize={printPreview.size}
+      />
       {/* Header Area */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex bg-white p-1 rounded-2xl border border-slate-200">
@@ -441,17 +688,19 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
           >
             سجل العمليات
           </button>
-          <button
-            onClick={() => setActiveTab("boxes")}
-            className={cn(
-              "px-6 py-2 rounded-xl text-sm font-black transition-all",
-              activeTab === "boxes"
-                ? "bg-blue-600 text-white shadow-lg shadow-blue-200"
-                : "text-slate-400 hover:text-slate-600",
-            )}
-          >
-            الصناديق
-          </button>
+          {hasPermission(currentUser, 'cash_boxes') && (
+            <button
+              onClick={() => setActiveTab("boxes")}
+              className={cn(
+                "px-6 py-2 rounded-xl text-sm font-black transition-all",
+                activeTab === "boxes"
+                  ? "bg-blue-600 text-white shadow-lg shadow-blue-200"
+                  : "text-slate-400 hover:text-slate-600",
+              )}
+            >
+              الصناديق
+            </button>
+          )}
           {isAdmin && (
             <button
               onClick={() => setActiveTab("transfers")}
@@ -462,47 +711,35 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
                   : "text-slate-400 hover:text-slate-600",
               )}
             >
-              التحويلات البينية
+              توريد الصناديق
             </button>
           )}
         </div>
 
         <div className="flex gap-2">
-          {activeTab === "transactions" && (
-            <>
+          {hasPermission(currentUser, 'cash_boxes') && activeTab === "boxes" && (
+            <div className="flex gap-2">
               <button
                 onClick={() => {
-                  setEditingTransaction(null);
-                  setTransForm({
-                    type: "قبض",
-                    amount: 0,
+                  setBoxForm({
+                    name: "",
                     currency: "YER",
-                    description: "",
-                    partnerId: "",
-                    partnerName: "",
+                    userId: "",
+                    userName: "",
+                    balance: 0,
+                    isActive: true,
                   });
-                  setModalType("transaction");
+                  setModalType("box");
                   setIsModalOpen(true);
                 }}
-                className="bg-emerald-600 text-white px-6 py-2.5 rounded-2xl font-black shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition-all flex items-center gap-2"
+                className="bg-blue-600 text-white px-6 py-2.5 rounded-2xl font-black shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all flex items-center gap-2"
               >
-                <Plus size={20} />
-                سند مالي
+                <LayoutGrid size={20} />
+                صندوق جديد
               </button>
-            </>
+            </div>
           )}
-          {isAdmin && activeTab === "boxes" && (
-            <button
-              onClick={() => {
-                setModalType("box");
-                setIsModalOpen(true);
-              }}
-              className="bg-blue-600 text-white px-6 py-2.5 rounded-2xl font-black shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all flex items-center gap-2"
-            >
-              <LayoutGrid size={20} />
-              صندوق جديد
-            </button>
-          )}
+
           {isAdmin && activeTab === "transfers" && (
             <button
               onClick={() => {
@@ -527,82 +764,167 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
             exit={{ opacity: 0, y: -10 }}
             key="transactions"
           >
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pb-24">
-                  {transactions.map((t) => (
-                    <div key={t.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex flex-col gap-3 relative overflow-hidden group">
-                      
-                      <div className="flex justify-between items-start mb-1">
-                          <div className="flex flex-col">
-                              <span className="text-[10px] text-slate-400 font-black mb-1">#{t.id?.slice(0, 6)}</span>
-                              <span className="font-bold text-slate-800 text-sm">{t.partnerName || "عام"}</span>
-                          </div>
-                          <div className="flex flex-col items-end gap-1">
-                              <span
-                                className={cn(
-                                  "text-[10px] font-black px-2 py-0.5 rounded",
-                                  t.type === "قبض"
-                                    ? "bg-emerald-50 text-emerald-600"
-                                    : t.type === "صرف"
-                                      ? "bg-rose-50 text-rose-600"
-                                      : "bg-blue-50 text-blue-600",
-                                )}
-                              >
-                                {t.type}
-                              </span>
-                              <span className="text-[10px] text-slate-400 font-bold">
-                                {t.createdAt ? new Date(t.createdAt).toLocaleDateString("ar-EG") : "غير محدد"}
-                              </span>
-                          </div>
-                      </div>
-
-                      <div className="py-2 border-t border-b border-slate-50 flex flex-col gap-1">
-                          <p className="text-[10px] text-slate-400 font-bold">البيان</p>
-                          <p className="text-xs text-slate-600 font-medium">{t.description}</p>
-                      </div>
-
-                      <div className="flex items-center justify-between mt-1">
-                          <div className="flex items-baseline gap-1">
-                              <span className="font-black text-base font-mono text-slate-900">{(t.amount || 0).toLocaleString()}</span>
-                              <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-md">{t.currency}</span>
-                          </div>
-                          
-                          <div className="flex items-center gap-2 mt-2 w-full pt-3 border-t border-slate-50">
-                              <button
-                                onClick={() => openEditTrans(t)}
-                                className="flex flex-1 items-center justify-center gap-1.5 p-2 bg-slate-50 text-slate-600 hover:text-blue-600 hover:bg-blue-50 border border-slate-100 rounded-lg transition-colors text-xs font-bold"
-                              >
-                                <Edit2 size={14} /> تعديل
-                              </button>
-                              {isAdmin && (
-                                <button
-                                  onClick={() => handleDeleteTrans(t)}
-                                  className="flex flex-1 items-center justify-center gap-1.5 p-2 bg-slate-50 text-slate-600 hover:text-rose-600 hover:bg-rose-50 border border-slate-100 rounded-lg transition-colors text-xs font-bold"
-                                >
-                                  <Trash2 size={14} /> حذف
-                                </button>
-                              )}
-                          </div>
-                      </div>
-                    </div>
-                  ))}
-                  {transactions.length === 0 && (
-                      <div className="col-span-1 md:col-span-2 lg:col-span-3 py-20 text-center text-slate-400 font-bold uppercase tracking-widest text-xs border border-dashed border-slate-200 rounded-2xl">
-                          لا توجد سندات
-                      </div>
-                  )}
-            </div>
             
-            {hasMore && (
-                <div className="flex justify-center mt-4 pb-24">
-                    <button
-                        onClick={() => loadTransactions(false)}
-                        disabled={isLoadingMore}
-                        className="px-6 py-2 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 transition-colors disabled:opacity-50"
+            <div className="pb-10">
+                <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-4 mb-4">
+                    <button 
+                      onClick={() => setIsFiltersOpen(!isFiltersOpen)}
+                      className="flex items-center justify-between w-full text-sm font-bold text-slate-700 hover:text-blue-600 transition-colors"
                     >
-                        {isLoadingMore ? "جاري التحميل..." : "تحميل المزيد"}
+                      <div className="flex items-center gap-2">
+                         <Filter size={18} />
+                         <span>خيارات الفلترة والبحث</span>
+                      </div>
+                      {isFiltersOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
                     </button>
+                    
+                    <AnimatePresence>
+                      {isFiltersOpen && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: "auto", opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          className="overflow-hidden"
+                        >
+                            <div className="grid grid-cols-1 md:grid-cols-5 gap-4 pt-4 border-t border-slate-100">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 mb-1">من تاريخ</label>
+                                    <input type="date" value={filterStartDate} onChange={e => setFilterStartDate(e.target.value)} className="w-full p-2 border border-slate-200 rounded-xl text-sm bg-slate-50" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 mb-1">إلى تاريخ</label>
+                                    <input type="date" value={filterEndDate} onChange={e => setFilterEndDate(e.target.value)} className="w-full p-2 border border-slate-200 rounded-xl text-sm bg-slate-50" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 mb-1">نوع الحركة</label>
+                                    <select value={filterRecordType} onChange={e => setFilterRecordType(e.target.value)} className="w-full p-2 border border-slate-200 rounded-xl text-sm bg-slate-50">
+                                        <option value="all">الكل</option>
+                                        <option value="سند قبض">سند قبض</option>
+                                        <option value="سند صرف">سند صرف</option>
+                                        <option value="فاتورة بيع">فاتورة بيع</option>
+                                        <option value="فاتورة شراء">فاتورة شراء</option>
+                                        <option value="فاتورة بيع (سريع)">فاتورة بيع (سريع)</option>
+                                        <option value="فاتورة شراء (سريع)">فاتورة شراء (سريع)</option>
+                                        <option value="سند قبض (سريع)">سند قبض (سريع)</option>
+                                        <option value="سند صرف (سريع)">سند صرف (سريع)</option>
+                                        <option value="تسوية">تسوية</option>
+                                        <option value="تحويل">تحويل</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 mb-1">نوع الدفع</label>
+                                    <select value={filterPaymentType} onChange={e => setFilterPaymentType(e.target.value)} className="w-full p-2 border border-slate-200 rounded-xl text-sm bg-slate-50">
+                                        <option value="all">الكل</option>
+                                        <option value="نقدا">نقدا</option>
+                                        <option value="اجل">اجل</option>
+                                        <option value="جزئي">جزئي</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 mb-1">المستخدم</label>
+                                    <select value={filterUser} onChange={e => setFilterUser(e.target.value)} className="w-full p-2 border border-slate-200 rounded-xl text-sm bg-slate-50">
+                                        <option value="all">الكل</option>
+                                        {Array.from(new Set(movements.map(m => m.createdBy).filter(Boolean))).map(u => (
+                                            <option key={u} value={u}>{u}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                    
+                    {(() => {
+                        const filteredMovements = movements.filter(m => {
+                            let matchDate = true;
+                            const dateStr = m.createdAt.split('T')[0];
+                            if (filterStartDate && filterEndDate) {
+                                matchDate = dateStr >= filterStartDate && dateStr <= filterEndDate;
+                            } else if (filterStartDate) {
+                                matchDate = dateStr === filterStartDate;
+                            }
+
+                            const matchRecordType = filterRecordType === 'all' ? true : m.recordType === filterRecordType;
+                            const matchPaymentType = filterPaymentType === 'all' ? true : m.paymentType === filterPaymentType;
+                            const matchUser = filterUser === 'all' ? true : m.createdBy === filterUser;
+
+                            return matchDate && matchRecordType && matchPaymentType && matchUser;
+                        });
+
+                        const totalAmount = filteredMovements.reduce((sum, m) => sum + m.totalAmount, 0);
+                        const totalPaidCash = filteredMovements.reduce((sum, m) => sum + m.paidAmount, 0);
+                        const totalRemaining = filteredMovements.reduce((sum, m) => sum + m.remainingAmount, 0);
+
+                        return (
+                            <>
+                                <div className="flex gap-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                                    <div className="flex-1 bg-white p-3 rounded-lg border border-indigo-100 shadow-sm text-center">
+                                        <p className="text-xs text-indigo-600 font-bold mb-1">إجمالي الحركة المالية</p>
+                                        <p className="text-lg font-black text-indigo-700">{totalAmount.toLocaleString()}</p>
+                                    </div>
+                                    <div className="flex-1 bg-white p-3 rounded-lg border border-emerald-100 shadow-sm text-center">
+                                        <p className="text-xs text-emerald-600 font-bold mb-1">المدفوع نقداً</p>
+                                        <p className="text-lg font-black text-emerald-700">{totalPaidCash.toLocaleString()}</p>
+                                    </div>
+                                    <div className="flex-1 bg-white p-3 rounded-lg border border-rose-100 shadow-sm text-center">
+                                        <p className="text-xs text-rose-600 font-bold mb-1">المتبقي الآجل</p>
+                                        <p className="text-lg font-black text-rose-700">{totalRemaining.toLocaleString()}</p>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden overflow-x-auto shadow-sm">
+                                    <table className="w-full text-right text-xs whitespace-nowrap">
+                                        <thead className="bg-[#1e1b4b] text-white font-black">
+                                            <tr>
+                                                <th className="p-3 border-x border-slate-700">تاريخ ووقت الإدخال</th>
+                                                <th className="p-3 border-x border-slate-700">اسم الحركة</th>
+                                                <th className="p-3 border-x border-slate-700">نوع الدفع</th>
+                                                <th className="p-3 border-x border-slate-700">اسم الحساب</th>
+                                                <th className="p-3 border-x border-slate-700">الإجمالي</th>
+                                                <th className="p-3 border-x border-slate-700">الخصم</th>
+                                                <th className="p-3 border-x border-slate-700">المدفوع نقداً</th>
+                                                <th className="p-3 border-x border-slate-700">المتبقي</th>
+                                                <th className="p-3 border-x border-slate-700">الصندوق</th>
+                                                <th className="p-3 border-x border-slate-700">المستخدم</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100">
+                                            {filteredMovements.map((m, idx) => (
+                                                <tr key={m.id} 
+                                                    onClick={() => {
+                                                        if(onNavigate) {
+                                                            if(m.source === 'invoice') onNavigate('invoices');
+                                                            if(m.source === 'voucher') onNavigate('vouchers');
+                                                            if(m.source === 'quickEntry') onNavigate('quick_entries_history'); 
+                                                        }
+                                                    }}
+                                                    className={cn("cursor-pointer hover:bg-blue-50 transition-colors", idx % 2 === 0 ? "bg-white" : "bg-slate-50")}>
+                                                    <td className="p-3 font-mono text-slate-500">{new Date(m.createdAt).toLocaleString('ar-EG')}</td>
+                                                    <td className="p-3 font-bold text-indigo-700">{m.recordType}</td>
+                                                    <td className="p-3">{m.paymentType}</td>
+                                                    <td className="p-3 font-bold">{m.partnerName}</td>
+                                                    <td className="p-3 font-black text-slate-800">{m.totalAmount.toLocaleString()}</td>
+                                                    <td className="p-3 text-rose-600">{m.discount.toLocaleString()}</td>
+                                                    <td className="p-3 text-emerald-600 font-bold">{m.paidAmount.toLocaleString()}</td>
+                                                    <td className="p-3 text-rose-600 font-bold">{m.remainingAmount.toLocaleString()}</td>
+                                                    <td className="p-3 text-slate-500">{m.boxName}</td>
+                                                    <td className="p-3 text-slate-500">{m.createdBy}</td>
+                                                </tr>
+                                            ))}
+                                            {filteredMovements.length === 0 && (
+                                                <tr>
+                                                    <td colSpan={10} className="p-8 text-center text-slate-400 font-bold">لا توجد حركات مالية مطابقة</td>
+                                                </tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </>
+                        );
+                    })()}
                 </div>
-            )}
+            </div>
+
           </motion.div>
         )}
 
@@ -614,57 +936,84 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
             key="boxes"
             className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
           >
-            {cashBoxes.map((box) => (
-              <div
-                key={box.id}
-                onClick={() => setViewingBox(box)}
-                className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-slate-300 relative overflow-hidden group cursor-pointer"
-              >
-                <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50 rounded-full -mr-16 -mt-16 opacity-50 group-hover:scale-110 transition-transform" />
-                <div className="relative">
-                  <div className="flex justify-between items-start mb-6">
-                    <div className="w-10 h-10 bg-white rounded-2xl border border-slate-100 shadow-sm flex items-center justify-center text-blue-600 z-10 relative">
-                      <Wallet size={24} />
-                    </div>
-                    <div className="flex items-center gap-2 z-10 relative">
-                        {isAdmin && (
-                            <button onClick={(e) => { e.stopPropagation(); openEditBox(box); }} className="text-slate-400 hover:text-blue-600 bg-slate-50 hover:bg-blue-50 p-1.5 rounded-lg border border-slate-100 transition-colors">
-                                <Edit2 size={14} />
-                            </button>
-                        )}
-                        <div
-                          className={cn(
-                            "text-[10px] font-black px-2 py-0.5 rounded-full",
-                            box.isActive
-                              ? "bg-emerald-50 text-emerald-600 border border-emerald-100"
-                              : "bg-slate-100 text-slate-400",
+            {(() => {
+              const hasViewBalancePermission = hasPermission(currentUser, 'view_cash_balance');
+              const userAssignedBoxId = currentUser?.assignedBoxId;
+              
+              const filteredBoxes = cashBoxes.filter(b => {
+                if (b.recordStatus === 'deleted' || b.isActive === false) return false;
+                
+                if (!hasViewBalancePermission) {
+                  return false;
+                }
+                
+                if (userAssignedBoxId) {
+                  return b.id === userAssignedBoxId;
+                }
+                
+                return true;
+              });
+
+              if (filteredBoxes.length === 0) {
+                return (
+                  <div className="col-span-full py-12 text-center text-slate-400 font-bold bg-white rounded-3xl border border-slate-100 shadow-sm">
+                    لا توجد صناديق مالية لعرضها أو لا تملك الصلاحية الكافية.
+                  </div>
+                );
+              }
+
+              return filteredBoxes.map((box, index) => (
+                <div
+                  key={`${box.id}-${index}`}
+                  onClick={() => setViewingBox(box)}
+                  className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:border-slate-300 relative overflow-hidden group cursor-pointer"
+                >
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50 rounded-full -mr-16 -mt-16 opacity-50 group-hover:scale-110 transition-transform" />
+                  <div className="relative">
+                    <div className="flex justify-between items-start mb-6">
+                      <div className="w-10 h-10 bg-white rounded-2xl border border-slate-100 shadow-sm flex items-center justify-center text-blue-600 z-10 relative">
+                        <Wallet size={24} />
+                      </div>
+                      <div className="flex items-center gap-2 z-10 relative">
+                          {isAdmin && (
+                              <button onClick={(e) => { e.stopPropagation(); openEditBox(box); }} className="text-slate-400 hover:text-blue-600 bg-slate-50 hover:bg-blue-50 p-1.5 rounded-lg border border-slate-100 transition-colors">
+                                  <Edit2 size={14} />
+                              </button>
                           )}
-                        >
-                          {box.isActive ? "نشط" : "معطل"}
-                        </div>
+                          <div
+                            className={cn(
+                              "text-[10px] font-black px-2 py-0.5 rounded-full",
+                              box.isActive
+                                ? "bg-emerald-50 text-emerald-600 border border-emerald-100"
+                                : "bg-slate-100 text-slate-400",
+                            )}
+                          >
+                            {box.isActive ? "نشط" : "معطل"}
+                          </div>
+                      </div>
                     </div>
-                  </div>
-                  <h4 className="font-black text-slate-800 text-base mb-1">
-                    {box.name}
-                  </h4>
-                  <div className="flex items-center gap-2 text-slate-400 text-xs font-bold mb-6">
-                    <Users size={12} />
-                    {box.userName}
-                  </div>
-                  <div className="flex flex-col border-t border-slate-50 pt-4">
-                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">
-                      الرصيد الحالي
-                    </span>
-                    <span className="text-2xl font-black text-slate-900 font-mono tracking-tighter">
-                      {(box.balance || 0).toLocaleString()}
-                      <span className="text-sm font-normal mr-2 opacity-30">
-                        {box.currency}
+                    <h4 className="font-black text-slate-800 text-base mb-1">
+                      {box.name}
+                    </h4>
+                    <div className="flex items-center gap-2 text-slate-400 text-xs font-bold mb-6">
+                      <Users size={12} />
+                      {box.userName}
+                    </div>
+                    <div className="flex flex-col border-t border-slate-50 pt-4">
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">
+                        الرصيد الحالي
                       </span>
-                    </span>
+                      <span className="text-2xl font-black text-slate-900 font-mono tracking-tighter">
+                        {(box.balance || 0).toLocaleString()}
+                        <span className="text-sm font-normal mr-2 opacity-30">
+                          {box.currency}
+                        </span>
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              ));
+            })()}
           </motion.div>
         )}
 
@@ -740,7 +1089,7 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
                                   "ar-EG",
                                 ) : "غير محدد"}
                               </span>
-                              {isAdmin && (
+                              {isAdmin && !t.sourceId && (
                                 <button
                                   onClick={() => handleDeleteTrans(t)}
                                   className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors md:opacity-0 md:group-hover:opacity-100"
@@ -775,14 +1124,21 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white dark:bg-[#131b2e] w-full max-w-lg h-full md:h-auto max-h-full md:max-h-[90dvh] md:rounded-[2.5rem] shadow-2xl relative flex flex-col overflow-hidden"
+              drag
+              dragListener={false}
+              dragControls={modalDragControls}
+              dragMomentum={false}
+              className="bg-white dark:bg-[#131b2e] w-full max-w-lg h-[100dvh] md:h-auto max-h-full md:max-h-[90dvh] md:rounded-[2.5rem] shadow-2xl relative flex flex-col overflow-hidden"
             >
-              <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0">
+              <div 
+                className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 shrink-0 cursor-move"
+                onPointerDown={(e) => modalDragControls.start(e)}
+              >
                 <h3 className="text-base font-bold">
                   {modalType === "transaction" &&
                     (editingTransaction
-                      ? "تعديل السند المالي"
-                      : "سند مالي جديد")}
+                      ? (transForm.type === 'قبض' ? 'تعديل سند القبض' : 'تعديل سند الصرف')
+                      : (transForm.type === 'قبض' ? 'سند قبض جديد' : 'سند صرف جديد'))}
                   {modalType === "box" && (boxForm.id ? "تعديل بيانات الصندوق" : "إعداد صندوق جديد")}
                   {modalType === "transfer" && "تحويل مالي بين الصناديق"}
                 </h3>
@@ -871,11 +1227,12 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
                       </label>
                       <select
                         required
-                        className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl font-bold"
+                        className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl font-bold disabled:opacity-50"
                         value={transForm.boxId}
                         onChange={(e) =>
                           setTransForm({ ...transForm, boxId: e.target.value })
                         }
+                        disabled={!isAdmin}
                       >
                         <option value="">-- اختر الصندوق المالي --</option>
                         {cashBoxes
@@ -1159,10 +1516,9 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
             </motion.div>
           </div>
         )}
-
-        {/* Confirm Delete Modal */}
+        {/* Delete Confirmation Modal */}
         {transToDelete && (
-          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -1171,18 +1527,18 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
               className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
             />
             <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white w-full max-w-sm rounded-2xl shadow-2xl relative overflow-hidden z-10"
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-white rounded-2xl shadow-2xl relative overflow-hidden z-10 w-full max-w-sm"
             >
-              <div className="p-4 text-center space-y-4">
-                <div className="w-10 h-10 bg-rose-50 text-rose-600 rounded-full flex items-center justify-center mx-auto mb-2">
-                  <Trash2 size={32} />
+              <div className="p-6">
+                <div className="w-12 h-12 bg-rose-100 text-rose-600 rounded-2xl flex items-center justify-center mb-4 mx-auto">
+                  <Trash2 size={24} />
                 </div>
-                <h3 className="text-base font-black text-slate-800">تأكيد حذف السند</h3>
-                <p className="text-sm text-slate-500 leading-relaxed px-4 text-center">
-                  هل أنت متأكد من حذف هذا السند المالي بمبلغ <span className="font-bold text-slate-800">{(transToDelete.amount || 0).toLocaleString()} {transToDelete.currency}</span>؟ 
+                <h3 className="text-lg font-black text-slate-800 text-center mb-2">تأكيد الحذف</h3>
+                <p className="text-xs text-slate-500 font-bold text-center leading-relaxed">
+                  هل أنت متأكد من حذف هذا السند المالي بمبلغ <span className="font-bold text-slate-800">{(transToDelete.amount || 0).toLocaleString()} {transToDelete.currency}</span>؟
                   <br />
                   <span className="text-rose-600 font-bold mt-2 block">تنبيه: سيتم استرجاع تأثيراته على الصناديق وأرصدة الأطراف بالكامل!</span>
                 </p>
@@ -1207,13 +1563,20 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
 
         {/* Box Detail Modal */}
         {viewingBox && (() => {
-          const boxTransactions = transactions
-            .filter((t) => t.boxId === viewingBox.id || t.fromBoxId === viewingBox.id || t.toBoxId === viewingBox.id)
-            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          const boxTransactions = viewingBoxMovements;
           
-          const totalIn = boxTransactions.filter(t => (t.boxId === viewingBox.id && t.type === 'قبض') || (t.type === 'تحويل' && t.toBoxId === viewingBox.id)).reduce((acc, curr) => acc + curr.amount, 0);
-          const totalOut = boxTransactions.filter(t => (t.boxId === viewingBox.id && t.type === 'صرف') || (t.type === 'تحويل' && t.fromBoxId === viewingBox.id)).reduce((acc, curr) => acc + curr.amount, 0);
-          const openingBalance = (viewingBox.balance || 0) - totalIn + totalOut;
+          const totalIn = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] > 0) ? curr.boxChanges[viewingBox.id] : 0), 0);
+          const totalOut = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] < 0) ? Math.abs(curr.boxChanges[viewingBox.id]) : 0), 0);
+          const openingBalance = viewingBox.initialBalance !== undefined ? viewingBox.initialBalance : (viewingBox.balance || 0) - totalIn + totalOut;
+          
+          const runningBalances = new Map();
+          let currentBalance = openingBalance;
+          // Sort chronological to compute running balances
+          [...boxTransactions].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).forEach(t => {
+              const change = t.boxChanges ? (t.boxChanges[viewingBox.id] || 0) : 0;
+              currentBalance += change;
+              runningBalances.set(t.id, currentBalance);
+          });
 
           return (
           <div className="fixed inset-0 z-[120] flex items-center justify-center p-2 sm:p-4">
@@ -1333,24 +1696,29 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
                             <th className="px-3 py-2 w-[40%] text-right">البيان</th>
                             <th className="px-3 py-2 w-[15%] text-left text-emerald-600">وارد</th>
                             <th className="px-3 py-2 w-[15%] text-left text-rose-600">صادر</th>
+                            <th className="px-3 py-2 w-[15%] text-left">الرصيد</th>
                         </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                        {boxTransactions
-                            .map((t) => {
-                                const isIncome = (t.type === 'قبض' && t.boxId === viewingBox.id) || (t.type === 'تحويل' && t.toBoxId === viewingBox.id);
-                                const isOutcome = (t.type === 'صرف' && t.boxId === viewingBox.id) || (t.type === 'تحويل' && t.fromBoxId === viewingBox.id);
+                        {isLoadingBoxTransactions ? (
+                            <tr>
+                                <td colSpan={6} className="py-12 text-center text-slate-500 font-bold text-xs">
+                                    <div className="flex flex-col items-center gap-2">
+                                        <div className="w-5 h-5 border-2 border-slate-500 border-t-transparent rounded-full animate-spin"></div>
+                                        جاري تحميل الحركات المالية...
+                                    </div>
+                                </td>
+                            </tr>
+                        ) : (
+                            boxTransactions.map((t) => {
+                                const change = t.boxChanges ? (t.boxChanges[viewingBox.id] || 0) : 0;
+                                const isIncome = change > 0;
+                                const isOutcome = change < 0;
                                 
                                 return (
                                 <tr 
                                     key={t.id} 
-                                    onClick={() => {
-                                        if (t.type !== 'تحويل') {
-                                            openEditTrans(t);
-                                            setViewingBox(null);
-                                        }
-                                    }}
-                                    className="hover:bg-slate-50/70 transition-colors group cursor-pointer"
+                                    className="hover:bg-slate-50/70 transition-colors group"
                                 >
                                     <td className="px-3 py-2 align-top">
                                         <div className="font-bold text-[11px] text-slate-800 font-mono">
@@ -1364,34 +1732,38 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
                                         <span
                                             className={cn(
                                                 "text-[10px] font-black px-2 py-0.5 rounded-md inline-block",
-                                                t.type === "قبض"
+                                                isIncome
                                                     ? "bg-emerald-50 text-emerald-600 border border-emerald-100"
-                                                    : t.type === "صرف"
+                                                    : isOutcome
                                                     ? "bg-rose-50 text-rose-600 border border-rose-100"
                                                     : "bg-blue-50 text-blue-600 border border-blue-100"
                                             )}
                                         >
-                                            {t.type}
+                                            {t.recordType}
                                         </span>
                                     </td>
                                     <td className="px-3 py-2 text-right align-top">
                                         <p className="text-[11px] font-bold text-slate-800 leading-snug break-words">
-                                            {t.description}
+                                            {t.originalRecord?.description || t.recordType}
                                         </p>
                                         {t.partnerName && (
                                             <p className="text-[10px] text-slate-500 font-bold mt-1">الطرف: {t.partnerName}</p>
                                         )}
                                     </td>
                                     <td className="px-3 py-2 text-left font-mono font-black text-emerald-600 text-xs align-top">
-                                        {isIncome ? `+${(t.amount || 0).toLocaleString()}` : "-"}
+                                        {isIncome ? `+${(change || 0).toLocaleString()}` : "-"}
                                     </td>
                                     <td className="px-3 py-2 text-left font-mono font-black text-rose-600 text-xs align-top">
-                                        {isOutcome ? `-${(t.amount || 0).toLocaleString()}` : "-"}
+                                        {isOutcome ? `-${(Math.abs(change) || 0).toLocaleString()}` : "-"}
+                                    </td>
+                                    <td className="px-3 py-2 text-left font-mono font-black text-slate-900 text-xs align-top">
+                                        {(runningBalances.get(t.id) || 0).toLocaleString()}
                                     </td>
                                 </tr>
                                 );
-                            })}
-                        {openingBalance !== 0 && (
+                            }).reverse()
+                        )}
+                        {openingBalance !== 0 && !isLoadingBoxTransactions && (
                             <tr className="bg-amber-50/20">
                                 <td colSpan={3} className="px-3 py-2.5 text-left font-black text-amber-800 text-[11px]">
                                     الرصيد الافتتاحي (أول المدة):
@@ -1404,9 +1776,9 @@ export default function Transactions({ currentUser: propCurrentUser }: { current
                                 </td>
                             </tr>
                         )}
-                        {boxTransactions.length === 0 && openingBalance === 0 && (
+                        {!isLoadingBoxTransactions && boxTransactions.length === 0 && openingBalance === 0 && (
                             <tr>
-                                <td colSpan={5} className="py-6 text-center text-slate-400 font-bold text-xs">
+                                <td colSpan={6} className="py-6 text-center text-slate-400 font-bold text-xs">
                                     لا توجد حركات مالية مسجلة لهذا الصندوق
                                 </td>
                             </tr>

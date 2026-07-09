@@ -1,18 +1,31 @@
+import { syncEngine } from "../services/syncEngine";
 import React, { useState, useEffect } from "react";
 import { Plus, Search, Trash2, Shield, UserPlus, X, CheckCircle2, Key, Mail, Lock, User as UserIcon, UserMinus, UserCheck } from "lucide-react";
 import { dbService } from "../services/db";
 import { authService } from "../services/authService";
-import { AppUser, RoleLevel } from "../types";
+import { AppUser, RoleLevel, CashBox } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
 
 const ALL_PAGES = [
     { id: 'dashboard', label: 'لوحة التحكم' },
     { id: 'invoices', label: 'عرض الفواتير' },
-    { id: 'add_invoices', label: 'إضافة وتعديل وحذف الفواتير' },
+    { id: 'add_invoices', label: 'إضافة فواتير' },
+    { id: 'edit_invoices', label: 'تعديل فواتير' },
+    { id: 'delete_invoices', label: 'حذف فواتير' },
     { id: 'inventory', label: 'عرض المخزون والأصناف' },
-    { id: 'edit_inventory', label: 'إضافة وتعديل وحذف المخزون' },
-    { id: 'transactions', label: 'الخزينة والعمليات المالية (قبض وصرف)' },
+    { id: 'add_inventory', label: 'إضافة أصناف' },
+    { id: 'edit_inventory', label: 'تعديل أصناف' },
+    { id: 'delete_inventory', label: 'حذف أصناف' },
+    { id: 'transactions', label: 'عرض العمليات المالية' },
+    { id: 'cash_boxes', label: 'إدارة الصناديق' },
+    { id: 'add_transaction', label: 'إضافة عملية مالية' },
+    { id: 'edit_transaction', label: 'تعديل عملية مالية' },
+    { id: 'delete_transaction', label: 'حذف عملية مالية' },
+    { id: 'vouchers', label: 'عرض سندات صرف وقبض' },
+    { id: 'add_vouchers', label: 'إضافة سندات صرف وقبض' },
+    { id: 'edit_vouchers', label: 'تعديل سندات صرف وقبض' },
+    { id: 'delete_vouchers', label: 'حذف سندات صرف وقبض' },
     { id: 'reports', label: 'عرض التقارير المالية والأرباح' },
     { id: 'partners', label: 'إدارة العملاء والموردين' },
     { id: 'optical_hub', label: 'مركز صيانة النظارات والورشة' },
@@ -21,10 +34,14 @@ const ALL_PAGES = [
     { id: 'settings', label: 'أمان النظام وإعدادات النسخ الاحتياطي' },
     { id: 'audit_logs', label: 'عرض سجل حركات النظام (Audit)' },
     { id: 'users', label: 'إدارة المستخدمين وصلاحياتهم' },
+    { id: 'global_edit', label: 'صلاحية التعديل (تعديل السجلات والفواتير والأصناف)' },
+    { id: 'global_delete', label: 'صلاحية الحذف (حذف السجلات والسندات والأصناف)' },
+    { id: 'view_cash_balance', label: 'عرض الرصيد النقدي المتوفر والصناديق المرتبطة' },
 ];
 
-export default function Users() {
+export default function Users({ currentUser }: { currentUser: AppUser }) {
     const [users, setUsers] = useState<AppUser[]>([]);
+    const [cashBoxes, setCashBoxes] = useState<CashBox[]>([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [searchTerm, setSearchTerm] = useState("");
     
@@ -36,7 +53,8 @@ export default function Users() {
         password: "",
         role: "CASHIER",
         isActive: true,
-        permissions: ['dashboard', 'inventory', 'sales', 'customers']
+        permissions: ['dashboard', 'inventory', 'sales', 'customers'],
+        assignedBoxId: ""
     });
 
     const [editingUser, setEditingUser] = useState<AppUser | null>(null);
@@ -45,12 +63,19 @@ export default function Users() {
     const [newPassword, setNewPassword] = useState("");
 
     useEffect(() => {
-        loadUsers();
+         loadUsers();
+    
+        const unsubscribe = syncEngine.subscribe('DATA_CHANGED', () => {
+            loadUsers();
+        });
+        return unsubscribe;
     }, []);
 
     const loadUsers = async () => {
         const data = await dbService.getAll("users");
+        const boxes = await dbService.getAll("cashBoxes");
         setUsers(data as AppUser[]);
+        setCashBoxes(boxes as CashBox[]);
     };
 
     const handleOpenModal = (user?: AppUser) => {
@@ -66,7 +91,8 @@ export default function Users() {
                 password: "",
                 role: "CASHIER",
                 isActive: true,
-                permissions: ['dashboard', 'inventory', 'sales', 'customers']
+                permissions: ['dashboard', 'inventory', 'sales', 'customers'],
+                assignedBoxId: ""
             });
         }
         setIsModalOpen(true);
@@ -115,15 +141,56 @@ export default function Users() {
             }
 
             if (editingUser?.id) {
+                // Check if username or name is duplicated
+                const existingUsers = await dbService.getAll("users") as AppUser[];
+                const duplicateUsername = existingUsers.find(u => 
+                    u.id !== editingUser.id && 
+                    u.username?.toLowerCase() === formData.username?.toLowerCase()
+                );
+                if (duplicateUsername) {
+                    alert("اسم تسجيل الدخول موجود مسبقاً لمستخدم آخر! يرجى اختيار اسم آخر.");
+                    setIsSaving(false);
+                    return;
+                }
+
+                const duplicateName = existingUsers.find(u => 
+                    u.id !== editingUser.id && 
+                    (u.name || '').trim().toLowerCase() === (formData.name || '').trim().toLowerCase()
+                );
+                if (duplicateName) {
+                    alert("الاسم الكامل موجود مسبقاً لمستخدم آخر! يرجى كتابة اسم مختلف.");
+                    setIsSaving(false);
+                    return;
+                }
+
+                const permissionsChanged = JSON.stringify(dataToSave.permissions) !== JSON.stringify(editingUser.permissions);
+                const roleChanged = dataToSave.role !== editingUser.role;
+                let customDesc = `تعديل بيانات المستخدم: ${dataToSave.name}`;
+                if (permissionsChanged && roleChanged) {
+                    customDesc = `تعديل صلاحيات ودور المستخدم: ${dataToSave.name}`;
+                } else if (permissionsChanged) {
+                    customDesc = `تعديل صلاحيات الوصول للمستخدم: ${dataToSave.name}`;
+                } else if (roleChanged) {
+                    customDesc = `تغيير دور المستخدم: ${dataToSave.name} إلى ${dataToSave.role}`;
+                }
+
                 await dbService.update("users", editingUser.id, dataToSave);
+                await dbService.logAudit('UPDATE', 'User', editingUser.id, customDesc, null, null, null);
                 alert("تم تحديث بيانات المستخدم بنجاح");
             } else {
                 
-                // check if username exists
+                // check if username or name exists
                 const existingUsers = await dbService.getAll("users") as AppUser[];
                 const exists = existingUsers.find(u => u.username?.toLowerCase() === formData.username?.toLowerCase());
                 if (exists) {
-                    alert("اسم المستخدم (الدخول) موجود مسبقاً! يرجى اختيار اسم آخر.");
+                    alert("اسم تسجيل الدخول موجود مسبقاً! يرجى اختيار اسم آخر.");
+                    setIsSaving(false);
+                    return;
+                }
+
+                const existsName = existingUsers.find(u => (u.name || '').trim().toLowerCase() === (formData.name || '').trim().toLowerCase());
+                if (existsName) {
+                    alert("الاسم الكامل موجود مسبقاً! يرجى كتابة اسم مختلف.");
                     setIsSaving(false);
                     return;
                 }
@@ -197,10 +264,14 @@ export default function Users() {
         
         if (confirm(confirmMsg)) {
             try {
-                await dbService.update("users", user.id, { 
+                const customDesc = newStatus 
+                    ? `تفعيل حساب المستخدم: ${user.name}` 
+                    : `تعطيل حساب المستخدم: ${user.name}`;
+                await dbService.update("users", user.id || "err", { 
                     isActive: newStatus,
-                    sessionVersion: Date.now() // Force logout by updating session version
+                    sessionVersion: Date.now()
                 });
+                await dbService.logAudit('UPDATE', 'User', user.id || "err", customDesc, null, null, null);
                 loadUsers();
                 alert(newStatus ? "تم تفعيل الحساب" : "تم تعطيل الحساب");
             } catch (error) {
@@ -210,8 +281,9 @@ export default function Users() {
     };
 
     const filteredUsers = users.filter(u => 
-        (u.name || '').toLowerCase().includes((searchTerm || '').toLowerCase()) ||
-        (u.role || '').toLowerCase().includes((searchTerm || '').toLowerCase())
+        (u.name || '').trim().length > 0 &&
+        ((u.name || '').toLowerCase().includes((searchTerm || '').toLowerCase()) ||
+        (u.role || '').toLowerCase().includes((searchTerm || '').toLowerCase()))
     );
 
     return (
@@ -227,13 +299,15 @@ export default function Users() {
                         onChange={(e) => setSearchTerm(e.target.value)}
                     />
                 </div>
-                <button
-                    onClick={() => handleOpenModal()}
-                    className="flex items-center gap-2 bg-slate-900 text-white px-6 py-2 rounded-xl hover:bg-black transition-colors shadow-lg cursor-pointer"
-                >
-                    <UserPlus size={18} />
-                    إضافة مستخدم جديد
-                </button>
+                {(currentUser.role === 'SUPER_ADMIN' || currentUser.role === 'ADMIN') && (
+                    <button
+                        onClick={() => handleOpenModal()}
+                        className="flex items-center gap-2 bg-slate-900 text-white px-6 py-2 rounded-xl hover:bg-black transition-colors shadow-lg cursor-pointer"
+                    >
+                        <UserPlus size={18} />
+                        إضافة مستخدم جديد
+                    </button>
+                )}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -320,7 +394,7 @@ export default function Users() {
                                         كامل صلاحيات الوصول
                                     </span>
                                 ) : (
-                                    user.permissions.map(pid => (
+                                    (user.permissions || []).map(pid => (
                                         <span key={pid} className="px-2 py-1 bg-slate-50 text-slate-600 rounded text-[9px] font-bold border border-slate-100">
                                             {ALL_PAGES.find(p => p.id === pid)?.label || pid}
                                         </span>
@@ -515,6 +589,19 @@ export default function Users() {
                                             <option value="CASHIER">كاشير / بائع</option>
                                             <option value="EMPLOYEE">موظف ورشة / صيانة</option>
                                             <option value="VIEWER">مراقب (للقراءة فقط)</option>
+                                        </select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-500 uppercase">صندوق النقد المخصص</label>
+                                        <select
+                                            className="w-full px-4 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 font-bold"
+                                            value={formData.assignedBoxId || ""}
+                                            onChange={(e) => setFormData({ ...formData, assignedBoxId: e.target.value })}
+                                        >
+                                            <option value="">-- بدون صندوق مخصص --</option>
+                                            {cashBoxes.map(box => (
+                                                <option key={box.id} value={box.id}>{box.name}</option>
+                                            ))}
                                         </select>
                                     </div>
                                     <div className="space-y-2">

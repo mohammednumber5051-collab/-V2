@@ -1,133 +1,219 @@
-import { initializeApp } from "firebase/app";
-import { initializeFirestore, getFirestore, doc, getDocFromServer, enableIndexedDbPersistence, disableNetwork } from "firebase/firestore";
-import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signInAnonymously } from "firebase/auth";
+import { initializeApp, getApps, getApp } from "firebase/app";
+import {
+    getFirestore,
+    initializeFirestore,
+    memoryLocalCache,
+    persistentLocalCache,
+    terminate,
+    clearIndexedDbPersistence,
+    Firestore,
+    collection,
+    addDoc,
+    updateDoc,
+    deleteDoc,
+    doc,
+    setDoc,
+    getDocs,
+    getDoc,
+    query,
+    where,
+    orderBy,
+    Timestamp,
+    increment,
+    runTransaction,
+    writeBatch,
+    limit,
+    startAfter,
+    QueryConstraint,
+    onSnapshot
+} from "firebase/firestore";
+
+export {
+    collection,
+    addDoc,
+    updateDoc,
+    deleteDoc,
+    doc,
+    setDoc,
+    getDocs,
+    getDoc,
+    query,
+    where,
+    orderBy,
+    Timestamp,
+    increment,
+    runTransaction,
+    writeBatch,
+    limit,
+    startAfter,
+    QueryConstraint,
+    onSnapshot,
+    terminate,
+    clearIndexedDbPersistence
+};
+
+import {
+    getAuth,
+    onAuthStateChanged,
+    GoogleAuthProvider,
+    signInWithPopup,
+    signInAnonymously
+} from "firebase/auth";
+
 import config from "../firebase-applet-config.json";
 
-const app = initializeApp(config);
+export const app =
+    getApps().length === 0
+        ? initializeApp(config)
+        : getApp();
 
-let firestoreDb: any;
+
+// =========================
+// Firestore (Default Database)
+// =========================
+
+let firestoreInstance: Firestore;
 try {
-    firestoreDb = initializeFirestore(app, {
-        experimentalForceLongPolling: true,
-    }, config.firestoreDatabaseId);
-} catch (e) {
-    console.warn("initializeFirestore failed or was already called, falling back to getFirestore:", e);
-    try {
-        firestoreDb = getFirestore(app, config.firestoreDatabaseId);
-    } catch (err) {
-        console.error("Critical: Failed to initialize Firestore with getFirestore fallback as well:", err);
-    }
-}
-
-export const db = firestoreDb;
-
-// Enable Offline Persistence for Android/Mobile support
-if (typeof window !== 'undefined') {
-    enableIndexedDbPersistence(db).catch((err) => {
-        if (err.code === 'failed-precondition') {
-            // Multiple tabs open, persistence can only be enabled in one tab at a a time.
-            console.warn("Firestore Persistence: Failed-precondition (Multiple tabs?)");
-        } else if (err.code === 'unimplemented') {
-            // The current browser does not support all of the features required to enable persistence
-            console.warn("Firestore Persistence: Unimplemented on this browser");
-        }
+    const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
+    console.log(`Initializing Firestore with database: ${config.firestoreDatabaseId}`);
+    
+    firestoreInstance = initializeFirestore(app, {
+        localCache: memoryLocalCache(),
+        experimentalAutoDetectLongPolling: true,
+        ...(dbId ? { databaseId: dbId } : {})
     });
+    console.log("Firestore initialized successfully.");
+} catch (e) {
+    console.warn("Firestore initialization failed, falling back to getFirestore:", e);
+    const dbId = config.firestoreDatabaseId === "(default)" ? undefined : config.firestoreDatabaseId;
+    firestoreInstance = getFirestore(app, dbId);
 }
+
+export const db: Firestore = firestoreInstance;
+
+
+// =========================
+// Authentication
+// =========================
 
 export const auth = getAuth(app);
 
-// Helper to wait for auth readiness and ensure a session exists
-export interface AuthState {
-    user: any | null;
-    status: 'loading' | 'authenticated' | 'unauthenticated' | 'error';
-    error?: string;
-}
+let anonymousAttempted = false;
 
-export const signInWithGoogle = async () => {
-    const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: 'select_account' });
-    try {
-        const result = await signInWithPopup(auth, provider);
-        return result.user;
-    } catch (e: any) {
-        console.error("Google Auth Error:", e);
-        throw e;
-    }
-};
+onAuthStateChanged(auth, (user) => {
 
-export const waitForAuth = (): Promise<AuthState> => {
-    return new Promise((resolve) => {
-        // Resolve immediately if already authenticated
-        if (auth.currentUser) {
-            resolve({ user: auth.currentUser, status: 'authenticated' });
-            return;
-        }
+    if (user) return;
 
-        let isSignInProgress = false;
+    if (anonymousAttempted) return;
 
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
-            if (!user) {
-                if (isSignInProgress) return; // Wait for the sign-in we already triggered
-                
-                // Attempt anonymous login to satisfy Firestore rules even for unauthenticated web users
-                try {
-                    isSignInProgress = true;
-                    await signInAnonymously(auth);
-                    // onAuthStateChanged will fire again with the new user, so we don't resolve yet
-                } catch (e) {
-                    console.warn("Firebase: Anonymous login denied. Many rules will be restricted.");
-                    unsubscribe();
-                    resolve({ user: null, status: 'unauthenticated' });
-                }
-            } else {
-                console.info("Firebase: Authenticated as", user.isAnonymous ? "Anonymous User" : user.email || user.uid);
-                unsubscribe();
-                resolve({ user, status: 'authenticated' });
-            }
+    anonymousAttempted = true;
+
+    signInAnonymously(auth)
+        .then(() => {
+            console.log("Anonymous authentication succeeded.");
+        })
+        .catch((e) => {
+
+            console.warn(
+                "Anonymous authentication unavailable:",
+                e.code
+            );
+
+            // لا نوقف التطبيق إذا فشل Anonymous Auth
+            // لأن Firestore قد يكون متاحاً حسب قواعد الأمان.
         });
 
-        // Safety timeout
-        setTimeout(() => {
-            if (!auth.currentUser) {
-                console.warn("Auth readiness timeout.");
-                unsubscribe();
-                resolve({ user: null, status: 'unauthenticated' });
-            }
-        }, 2500);
+});
+
+
+// =========================
+// Google Login
+// =========================
+
+export const signInWithGoogle = async () => {
+
+    const provider = new GoogleAuthProvider();
+
+    provider.setCustomParameters({
+        prompt: "select_account"
     });
+
+    const result = await signInWithPopup(auth, provider);
+
+    return result.user;
+
 };
 
-// Validate Connection to Firestore (as per skill recommendation)
-async function testConnection() {
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        console.info("Firestore status: Operating in offline cache mode.");
-        try {
-            await disableNetwork(db);
-        } catch (e) {}
-        return;
-    }
 
-    try {
-        await waitForAuth();
-        // Set a smart timeout of 2000ms to quickly fall back and prevent blocking
-        const connectionPromise = getDocFromServer(doc(db, 'system', 'connection_test'));
-        const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error("Connection check timed out")), 2000)
-        );
+// =========================
+// Wait For Auth
+// =========================
 
-        await Promise.race([connectionPromise, timeoutPromise]);
-        console.log("Firebase connection established successfully.");
-    } catch (error) {
-        console.warn("Firebase client is offline or unreachable. Disabling network to prevent hangs.", error);
-        try {
-            await disableNetwork(db);
-        } catch (e) {
-            console.error("Failed to disable Firestore network:", e);
+export interface AuthState {
+
+    user: any | null;
+
+    status:
+        | "loading"
+        | "authenticated"
+        | "unauthenticated";
+
+}
+
+
+export const waitForAuth = (): Promise<AuthState> => {
+
+    return new Promise((resolve) => {
+
+        if (auth.currentUser) {
+
+            resolve({
+                user: auth.currentUser,
+                status: "authenticated"
+            });
+
+            return;
+
         }
-    }
-}
 
-// Only test if not a placeholder
-if (config.projectId && !config.projectId.includes("placeholder") && !config.projectId.startsWith("remixed-")) {
-    testConnection();
-}
+        const unsubscribe = onAuthStateChanged(auth, (user) => {
+
+            unsubscribe();
+
+            resolve({
+
+                user,
+
+                status: user
+                    ? "authenticated"
+                    : "unauthenticated"
+
+            });
+
+        });
+
+        setTimeout(() => {
+
+            unsubscribe();
+
+            resolve({
+
+                user: auth.currentUser,
+
+                status: auth.currentUser
+                    ? "authenticated"
+                    : "unauthenticated"
+
+            });
+
+        }, 3000);
+
+    });
+
+};
+
+
+console.log(
+    "Firebase initialized for project:",
+    config.projectId
+);

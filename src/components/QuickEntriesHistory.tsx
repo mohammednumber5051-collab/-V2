@@ -5,14 +5,30 @@ import {
     ChevronRight, X, Info, Download, LayoutGrid, List as ListIcon 
 } from "lucide-react";
 import { dbService } from "../services/db";
-import { QuickFinancialEntry, StoreSettings, CashBox } from "../types";
+import { FinancialEngineService } from "../services/financialEngineService";
+import { syncEngine } from "../services/syncEngine";
+import { QuickFinancialEntry, StoreSettings, CashBox, AppUser } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
+import PrintPreviewModal from "./PrintPreviewModal";
 import { format, isToday, isWithinInterval, startOfWeek, endOfWeek, startOfMonth, endOfMonth, isSameDay } from "date-fns";
 import { ar } from "date-fns/locale";
 
+const safeNewDate = (val: any): Date => {
+    if (!val) return new Date();
+    if (typeof val === 'object' && val !== null && 'seconds' in val) {
+        return new Date(val.seconds * 1000);
+    }
+    const d = new Date(val);
+    if (isNaN(d.getTime())) {
+        return new Date();
+    }
+    return d;
+};
+
 interface QuickEntriesHistoryProps {
     onNavigate: (page: any, params?: any) => void;
+    currentUser: AppUser;
 }
 
 const ENTRY_TYPE_LABELS: Record<string, string> = {
@@ -29,8 +45,9 @@ const STATUS_COLORS: Record<string, string> = {
     "آجل": "bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-400"
 };
 
-export default function QuickEntriesHistory({ onNavigate }: QuickEntriesHistoryProps) {
+export default function QuickEntriesHistory({ onNavigate, currentUser }: QuickEntriesHistoryProps) {
     const [entries, setEntries] = useState<QuickFinancialEntry[]>([]);
+    const [users, setUsers] = useState<AppUser[]>([]);
     const [lastDoc, setLastDoc] = useState<any>(null);
     const [hasMore, setHasMore] = useState(true);
     const [isLoadingInitial, setIsLoadingInitial] = useState(true);
@@ -39,7 +56,14 @@ export default function QuickEntriesHistory({ onNavigate }: QuickEntriesHistoryP
     const [searchTerm, setSearchTerm] = useState("");
     const [filterType, setFilterType] = useState<string>("all");
     const [filterStatus, setFilterStatus] = useState<string>("all");
-    const [filterBox, setFilterBox] = useState<string>("all");
+    const [filterBox, setFilterBox] = useState<string>(() => {
+        const savedUser = localStorage.getItem("app_user");
+        const u = savedUser ? JSON.parse(savedUser) : null;
+        if (u?.assignedBoxId && u?.role !== 'SUPER_ADMIN' && u?.role !== 'ADMIN') {
+            return u.assignedBoxId;
+        }
+        return "all";
+    });
     const [filterDate, setFilterDate] = useState<string>("all"); // all, today, week, month, custom
     const [dateRange, setDateRange] = useState<{ start: string; end: string }>({ start: "", end: "" });
     const [settings, setSettings] = useState<StoreSettings | null>(null);
@@ -47,8 +71,25 @@ export default function QuickEntriesHistory({ onNavigate }: QuickEntriesHistoryP
     const [viewMode, setViewMode] = useState<'grid' | 'table'>('table');
     const [showFilters, setShowFilters] = useState(false);
 
+    // Print Preview State
+    const [printPreview, setPrintPreview] = useState<{
+        isOpen: boolean;
+        html: string;
+        title: string;
+        size: 'a4' | 'thermal';
+    }>({ isOpen: false, html: '', title: '', size: 'a4' });
+
     useEffect(() => {
+        const unsubscribe = syncEngine.subscribe('DATA_CHANGED', () => {
+            loadData(true);
+        });
         loadData();
+        const fetchUsers = async () => {
+            const allUsers = await dbService.getAll("users") as AppUser[];
+            setUsers(allUsers);
+        };
+        fetchUsers();
+        return unsubscribe;
     }, []);
 
     const loadData = async (reset: boolean = true) => {
@@ -62,11 +103,36 @@ export default function QuickEntriesHistory({ onNavigate }: QuickEntriesHistoryP
 
         try {
             const [data, s, boxes] = await Promise.all([
-                dbService.getPaginated("quick_financial_entries", 25, reset ? null : lastDoc, []),
+                dbService.getPaginated("quick_financial_entries", 100, reset ? null : lastDoc, []),
                 dbService.getStoreSettings(),
                 dbService.getAll("cashBoxes")
             ]);
-            setEntries(prev => reset ? data.data as QuickFinancialEntry[] : [...prev, ...data.data as QuickFinancialEntry[]]);
+            
+            const processedData = (data.data as QuickFinancialEntry[]).reduce((acc: QuickFinancialEntry[], entry: QuickFinancialEntry) => {
+                if (!entry.referenceNumber) {
+                    acc.push(entry);
+                    return acc;
+                }
+                const existingIndex = acc.findIndex(e => e.referenceNumber === entry.referenceNumber);
+                if (existingIndex !== -1) {
+                    // If we have manual_sale, keep it
+                    if (acc[existingIndex].entryType === 'manual_sale') return acc;
+                    // If current is manual_sale, replace
+                    if (entry.entryType === 'manual_sale') {
+                        acc[existingIndex] = entry;
+                    }
+                    return acc;
+                }
+                acc.push(entry);
+                return acc;
+            }, []);
+
+            setEntries(prev => {
+                if (reset) return processedData;
+                const existingIds = new Set(prev.map(e => e.id).filter(Boolean));
+                const filteredNew = processedData.filter(e => !existingIds.has(e.id));
+                return [...prev, ...filteredNew];
+            });
             setLastDoc(data.lastDoc);
             setHasMore(data.hasMore);
             if (reset) {
@@ -84,11 +150,23 @@ export default function QuickEntriesHistory({ onNavigate }: QuickEntriesHistoryP
     const handleDelete = async (entry: QuickFinancialEntry) => {
         if (!confirm("هل أنت متأكد من حذف هذه العملية المالية؟ سيتم التراجع عن كافه الآثار المالية (رصيد الصندوق ورصيد الطرف).")) return;
         
+        // Check for negative cashbox balance before deletion
+        if (entry.cashBoxId && entry.paidAmount > 0) {
+            const isIncoming = ['sale', 'manual_sale', 'customer_receipt'].includes(entry.entryType);
+            if (isIncoming) {
+                const box = cashBoxes.find(b => b.id === entry.cashBoxId);
+                if (box && ((box.balance || 0) - entry.paidAmount) < 0) {
+                    alert("لا يمكن حذف هذه العملية لأنها ستؤدي إلى رصيد سالب في الصندوق.");
+                    return;
+                }
+            }
+        }
+
         try {
-            await dbService.deleteQuickFinancialEntry(entry);
+            await FinancialEngineService.deleteQuickEntry(entry, currentUser);
             setEntries(prev => prev.filter(e => e.id !== entry.id));
         } catch (error) {
-            console.error("Delete failed", error);
+            console.error("DELETE BATCH COMMIT FAILED", error);
             alert("حدث خطأ أثناء الحذف");
         }
     };
@@ -96,87 +174,119 @@ export default function QuickEntriesHistory({ onNavigate }: QuickEntriesHistoryP
     const [selectedEntry, setSelectedEntry] = useState<QuickFinancialEntry | null>(null);
 
     const handleEdit = (entry: QuickFinancialEntry) => {
+        console.log("EDIT BUTTON CLICKED");
+        console.log("EDIT RECORD ID:", entry.id);
+        console.log("NAVIGATION STARTED");
         onNavigate('quick_entry', { editId: entry.id });
+        console.log("NAVIGATION COMPLETED");
     };
 
     const doPrint = (entry: QuickFinancialEntry) => {
-        const printWindow = window.open('', '_blank');
-        if (!printWindow) return;
-
         const isThermal = settings?.defaultPrintSize?.includes('80mm');
         const typeLabel = ENTRY_TYPE_LABELS[entry.entryType];
 
-        printWindow.document.write(`
-            <html dir="rtl" lang="ar">
-            <head>
-                <title>وصل مالي - ${entry.referenceNumber || 'جديد'}</title>
-                <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&display=swap" rel="stylesheet">
+        const html = `
                 <style>
-                    body { font-family: 'Cairo', sans-serif; margin: 0; padding: 20px; color: #333; }
-                    .container { max-width: ${isThermal ? '80mm' : '800px'}; margin: auto; border: 1px solid #eee; padding: 20px; border-radius: 10px; }
-                    .header { text-align: center; border-bottom: 2px solid #3b82f6; padding-bottom: 15px; margin-bottom: 20px; }
-                    .title { font-size: 24px; font-weight: 900; color: #1e3a8a; margin: 10px 0; }
-                    .info-grid { display: grid; grid-cols: 2; gap: 15px; margin-bottom: 20px; background: #f8fafc; padding: 15px; rounded: 8px; }
-                    .info-item { display: flex; justify-content: space-between; border-bottom: 1px dashed #cbd5e1; padding: 5px 0; }
-                    .label { font-weight: 700; color: #64748b; }
-                    .value { font-weight: 900; color: #0f172a; }
-                    .amount-box { margin-top: 20px; border: 2px solid #3b82f6; padding: 15px; text-align: center; border-radius: 8px; background: #eff6ff; }
-                    .amount-value { font-size: 28px; font-weight: 900; color: #1e40af; }
-                    .footer { margin-top: 30px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 15px; }
-                    @media print { .no-print { display: none; } }
+                    * { box-sizing: border-box; }
+                    .report-container { direction: rtl; padding: ${isThermal ? '1px' : '20px'}; font-family: 'Cairo', sans-serif; font-size: ${isThermal ? '11px' : '14px'}; max-width: 100%; overflow: hidden; color: #000; }
+                    .header { text-align: center; border-bottom: ${isThermal ? '1px dashed #000' : '2px solid #3b82f6'}; padding-bottom: ${isThermal ? '6px' : '10px'}; margin-bottom: ${isThermal ? '12px' : '15px'}; }
+                    .title { font-size: ${isThermal ? '14px' : '20px'}; font-weight: 900; color: ${isThermal ? '#000' : '#1e3a8a'}; margin: 5px 0; }
+                    .info-grid { display: grid; grid-template-columns: ${isThermal ? '1fr' : 'repeat(2, 1fr)'}; gap: ${isThermal ? '2px' : '10px'}; margin-bottom: ${isThermal ? '10px' : '15px'}; background: ${isThermal ? '#fff' : '#f8fafc'}; padding: ${isThermal ? '2px' : '10px'}; border-radius: 6px; }
+                    .info-item { display: flex; justify-content: space-between; border-bottom: 1px dashed ${isThermal ? '#000' : '#cbd5e1'}; padding: 3px 0; }
+                    .label { font-weight: 700; color: ${isThermal ? '#000' : '#64748b'}; font-size: ${isThermal ? '10px' : '13px'}; }
+                    .value { font-weight: 900; color: ${isThermal ? '#000' : '#0f172a'}; font-size: ${isThermal ? '10px' : '13px'}; }
+                    .amount-box { margin-top: ${isThermal ? '10px' : '15px'}; border: ${isThermal ? '1px dashed #000' : '2px solid #3b82f6'}; padding: ${isThermal ? '8px' : '10px'}; text-align: center; border-radius: ${isThermal ? '4px' : '6px'}; background: ${isThermal ? '#fff' : '#eff6ff'}; }
+                    .amount-value { font-size: ${isThermal ? '16px' : '24px'}; font-weight: 900; color: ${isThermal ? '#000' : '#1e40af'}; }
+                    .prescription-box { margin-top: ${isThermal ? '10px' : '15px'}; padding: ${isThermal ? '4px' : '10px'}; border: 1px dashed #000; border-radius: 4px; background: #fff; overflow-x: hidden; }
+                    .prescription-title { font-weight: 900; color: #000; border-bottom: 1px solid #000; padding-bottom: 3px; margin-bottom: 6px; font-size: ${isThermal ? '11px' : '14px'}; text-align: center; }
+                    .prescription-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 2px; text-align: center; font-size: ${isThermal ? '9px' : '12px'}; }
+                    .p-header { background: #f1f5f9; font-weight: 700; padding: 2px; border: 1px solid #000; }
+                    .p-cell { border: 1px solid #000; padding: 2px; }
+                    .footer { margin-top: ${isThermal ? '15px' : '20px'}; text-align: center; font-size: ${isThermal ? '9px' : '12px'}; color: #000; border-top: 1px dashed #000; padding-top: 10px; }
                 </style>
-            </head>
-            <body>
-                <div class="container">
+                <div class="report-container">
                     <div class="header">
                         <div class="title">${settings?.storeNameAr || 'مركز البصريات'}</div>
-                        <div style="font-weight: 700; color: #3b82f6;">${entry.referenceNumber ? 'إيصال مالي رقم: ' + entry.referenceNumber : 'إيصال مالي سريع'}</div>
+                        <div style="font-weight: 700; color: #000;">${entry.referenceNumber ? 'إيصال مالي رقم: ' + entry.referenceNumber : 'إيصال مالي سريع'}</div>
                     </div>
 
                     <div class="info-grid">
                         <div class="info-item"><span class="label">نوع العملية:</span> <span class="value">${typeLabel}</span></div>
-                        <div class="info-item"><span class="label">التاريخ:</span> <span class="value">${new Date(entry.createdAt).toLocaleDateString('ar-YE')}</span></div>
+                        <div class="info-item"><span class="label">التاريخ:</span> <span class="value">${safeNewDate(entry.createdAt).toLocaleDateString('ar-YE')}</span></div>
                         <div class="info-item"><span class="label">الطرف:</span> <span class="value">${entry.partnerName}</span></div>
                         <div class="info-item"><span class="label">الهاتف:</span> <span class="value">${entry.partnerPhone || '---'}</span></div>
-                        <div class="info-item"><span class="label">الحالة:</span> <span class="value">${entry.paymentStatus}</span></div>
-                        <div class="info-item"><span class="label">المستخدم:</span> <span class="value">${entry.createdBy}</span></div>
+                        <div class="info-item"><span class="label">الصندوق:</span> <span class="value">${entry.cashBoxName || '---'}</span></div>
+                        <div class="info-item"><span class="label">بواسطة:</span> <span class="value">${users.find(u => u.id === entry.createdBy)?.name || entry.createdBy}</span></div>
                     </div>
+
+                    ${entry.entryType === 'manual_sale' && entry.opticalPrescription ? `
+                    <div class="prescription-box">
+                        <div class="prescription-title">فحص النظر (وصفة طبية) / Prescription</div>
+                        <div class="prescription-grid" dir="ltr">
+                            <div class="p-header">Eye</div><div class="p-header">SPH</div><div class="p-header">CYL</div><div class="p-header">AXIS</div>
+                            <div class="p-cell" style="font-weight: bold; color: #000;">R (D)</div><div class="p-cell">${entry.opticalPrescription.rightEye?.distance?.sph || '-'}</div><div class="p-cell">${entry.opticalPrescription.rightEye?.distance?.cyl || '-'}</div><div class="p-cell">${entry.opticalPrescription.rightEye?.distance?.ax || '-'}</div>
+                            <div class="p-cell" style="font-weight: bold; color: #000;">L (D)</div><div class="p-cell">${entry.opticalPrescription.leftEye?.distance?.sph || '-'}</div><div class="p-cell">${entry.opticalPrescription.leftEye?.distance?.cyl || '-'}</div><div class="p-cell">${entry.opticalPrescription.leftEye?.distance?.ax || '-'}</div>
+                            <div class="p-cell" style="font-weight: bold; color: #000;">R (N)</div><div class="p-cell">${entry.opticalPrescription.rightEye?.near?.sph || '-'}</div><div class="p-cell">${entry.opticalPrescription.rightEye?.near?.cyl || '-'}</div><div class="p-cell">${entry.opticalPrescription.rightEye?.near?.ax || '-'}</div>
+                            <div class="p-cell" style="font-weight: bold; color: #000;">L (N)</div><div class="p-cell">${entry.opticalPrescription.leftEye?.near?.sph || '-'}</div><div class="p-cell">${entry.opticalPrescription.leftEye?.near?.cyl || '-'}</div><div class="p-cell">${entry.opticalPrescription.leftEye?.near?.ax || '-'}</div>
+                        </div>
+                        <div style="margin-top: 10px; display: flex; justify-content: space-between; font-size: 10px; font-weight: 700; flex-wrap: wrap; gap: 4px;">
+                            <span>IPD: <b>${entry.opticalPrescription.ipd || '---'}</b></span>
+                            <span>العدسة: <b>${entry.opticalPrescription.lensType || '---'}</b></span>
+                            <span>الإطار: <b>${entry.opticalPrescription.frameType || '---'}</b></span>
+                        </div>
+                    </div>
+                    ` : ''}
 
                     <div class="amount-box">
-                        <div class="label">إجمالي المبلغ المقبوض/المصروف</div>
-                        <div class="amount-value">${entry.amount.toLocaleString()} ${entry.currency || 'YER'}</div>
-                        ${entry.discount > 0 ? `<div style="font-size: 14px; margin-top: 5px;">خصم: ${entry.discount.toLocaleString()}</div>` : ''}
+                        <div class="label" style="color: #000; font-weight: 700;">صافي المبلغ</div>
+                        <div class="amount-value">${entry.netAmount.toLocaleString()} ${entry.currency || 'YER'}</div>
+                        ${isThermal ? `
+                        <div style="font-size: 10px; margin-top: 8px; font-weight: 700; color: #000; display: flex; flex-direction: column; border-top: 1px dashed #000; padding-top: 6px; gap: 4px;">
+                            <div style="display: flex; justify-content: space-between;"><span>الإجمالي:</span> <span>${entry.amount.toLocaleString()}</span></div>
+                            <div style="display: flex; justify-content: space-between;"><span>الخصم:</span> <span>${entry.discount.toLocaleString()}</span></div>
+                            <div style="display: flex; justify-content: space-between;"><span>المدفوع:</span> <span>${entry.paidAmount.toLocaleString()}</span></div>
+                            <div style="display: flex; justify-content: space-between; font-weight: 900; border-top: 1px dotted #000; padding-top: 4px;"><span>المتبقي:</span> <span>${entry.remainingAmount.toLocaleString()}</span></div>
+                        </div>
+                        ` : `
+                        <div style="font-size: 13px; margin-top: 15px; font-weight: 700; color: #1e3a8a; display: flex; flex-wrap: wrap; justify-content: space-around; border-top: 1px dashed #bfdbfe; padding-top: 10px; gap: 5px;">
+                            <span style="color: #475569;">الإجمالي: ${entry.amount.toLocaleString()}</span>
+                            <span style="color: #e11d48;">الخصم: ${entry.discount.toLocaleString()}</span>
+                            <span style="color: #059669;">المدفوع: ${entry.paidAmount.toLocaleString()}</span>
+                            <span style="color: #d97706;">المتبقي: ${entry.remainingAmount.toLocaleString()}</span>
+                        </div>
+                        `}
                     </div>
 
-                    <div style="margin-top: 20px; padding: 10px; background: #fffbeb; border: 1px solid #fef3c7; border-radius: 8px;">
-                        <div class="label" style="margin-bottom: 5px;">الملاحظات:</div>
-                        <div style="font-size: 14px; font-weight: 700; line-height: 1.6;">${entry.notes || '---'}</div>
+                    <div style="margin-top: ${isThermal ? '10px' : '20px'}; padding: ${isThermal ? '6px' : '10px'}; background: #fffbeb; border: 1px solid #fef3c7; border-radius: ${isThermal ? '4px' : '8px'};">
+                        <div class="label" style="margin-bottom: 3px;">الملاحظات:</div>
+                        <div style="font-size: ${isThermal ? '11px' : '14px'}; font-weight: 700; line-height: 1.5;">${entry.notes || '---'}</div>
                     </div>
 
                     <div class="footer">
                         <div>العنوان: ${settings?.address || 'اليمن - صنعاء'}</div>
                         <div>هاتف التواصل: ${settings?.phone || '777XXXXXX'}</div>
-                        <p>${settings?.printFooterText || 'شكراً لتعاملكم معنا'}</p>
+                        <p style="margin: 4px 0 0 0; font-weight: bold;">${settings?.printFooterText || 'شكراً لتعاملكم معنا'}</p>
                     </div>
                 </div>
-                <script>
-                    window.onload = () => { window.print(); window.close(); };
-                </script>
-            </body>
-            </html>
-        `);
-        printWindow.document.close();
+        `;
+
+        setPrintPreview({
+            isOpen: true,
+            html,
+            title: `وصل مالي - ${entry.referenceNumber || 'جديد'}`,
+            size: isThermal ? 'thermal' : 'a4'
+        });
     };
 
     const filteredEntries = entries.filter(e => {
-        const d = new Date(e.createdAt || "");
+        const d = safeNewDate(e.createdAt);
         
         // Search
         const matchesSearch = 
-            e.partnerName.toLowerCase().includes(searchTerm.toLowerCase()) || 
-            e.referenceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (e.notes || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (e.partnerPhone || "").includes(searchTerm);
+            String(e.partnerName || "").toLowerCase().includes(searchTerm.toLowerCase()) || 
+            String(e.referenceNumber || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+            String(e.notes || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+            String(e.partnerPhone || "").includes(searchTerm);
         
         // Type
         const matchesType = filterType === "all" || e.entryType === filterType;
@@ -194,7 +304,7 @@ export default function QuickEntriesHistory({ onNavigate }: QuickEntriesHistoryP
         else if (filterDate === "month") matchesDate = isWithinInterval(d, { start: startOfMonth(new Date()), end: endOfMonth(new Date()) });
         else if (filterDate === "custom" && dateRange.start && dateRange.end) {
             try {
-                matchesDate = isWithinInterval(d, { start: new Date(dateRange.start), end: new Date(dateRange.end) });
+                matchesDate = isWithinInterval(d, { start: safeNewDate(dateRange.start), end: safeNewDate(dateRange.end) });
             } catch(e) { matchesDate = true; }
         }
 
@@ -211,6 +321,13 @@ export default function QuickEntriesHistory({ onNavigate }: QuickEntriesHistoryP
 
     return (
         <div className="min-h-full bg-slate-50 dark:bg-slate-950 p-4 md:p-6 pb-24">
+            <PrintPreviewModal 
+                isOpen={printPreview.isOpen}
+                onClose={() => setPrintPreview(prev => ({ ...prev, isOpen: false }))}
+                htmlContent={printPreview.html}
+                title={printPreview.title}
+                paperSize={printPreview.size}
+            />
             {/* Warning Message */}
             <div className="mb-6 bg-blue-50 dark:bg-blue-500/5 border border-blue-200 dark:border-blue-500/20 p-3 rounded-2xl flex items-center justify-center gap-3">
                 <Info size={18} className="text-blue-500 shrink-0" />
@@ -338,7 +455,8 @@ export default function QuickEntriesHistory({ onNavigate }: QuickEntriesHistoryP
                                 <select
                                     value={filterBox}
                                     onChange={(e) => setFilterBox(e.target.value)}
-                                    className="w-full h-11 bg-white dark:bg-slate-800 border-none rounded-xl px-4 text-xs font-bold shadow-sm"
+                                    className="w-full h-11 bg-white dark:bg-slate-800 border-none rounded-xl px-4 text-xs font-bold shadow-sm disabled:opacity-50"
+                                    disabled={!!currentUser?.assignedBoxId && currentUser?.role !== 'SUPER_ADMIN' && currentUser?.role !== 'ADMIN'}
                                 >
                                     <option value="all">كل الصناديق</option>
                                     {cashBoxes.map(box => (
@@ -393,150 +511,160 @@ export default function QuickEntriesHistory({ onNavigate }: QuickEntriesHistoryP
                             تحديث البيانات
                         </button>
                     </div>
-                ) : viewMode === 'table' ? (
-                    /* Desktop Table View */
-                    <div className="hidden md:block bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-x-auto">
-                        <table className="w-full text-right border-collapse">
-                            <thead>
-                                <tr className="bg-slate-50 dark:bg-slate-800/50">
-                                    <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-16"># المرجع</th>
-                                    <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">نوع العملية</th>
-                                    <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">الطرف (عميل/مورد)</th>
-                                    <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">المبلغ الصافي</th>
-                                    <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">المدفوع</th>
-                                    <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">المتبقي</th>
-                                    <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">الحالة</th>
-                                    <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">الإجراءات</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                                {filteredEntries.map((entry) => (
-                                    <tr key={entry.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/20 transition-colors group">
-                                        <td className="px-5 py-4">
-                                            <span className="text-xs font-black text-slate-400 group-hover:text-blue-600 transition-colors">{entry.referenceNumber || "---"}</span>
-                                        </td>
-                                        <td className="px-5 py-4">
-                                            <div className="flex items-center gap-2">
-                                                <div className={cn(
-                                                    "w-2 h-2 rounded-full",
-                                                    entry.entryType === 'manual_sale' || entry.entryType === 'receipt' ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.3)]" : "bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.3)]"
-                                                )} />
-                                                <span className="text-sm font-black text-slate-700 dark:text-slate-200">{ENTRY_TYPE_LABELS[entry.entryType]}</span>
-                                            </div>
-                                            <p className="text-[10px] font-bold text-slate-400 mt-0.5">{JSON.stringify(entry.createdAt).slice(1, 11)}</p>
-                                        </td>
-                                        <td className="px-5 py-4">
-                                            <div className="flex flex-col">
-                                                <span className="text-sm font-black text-slate-900 dark:text-white capitalize">{entry.partnerName}</span>
-                                                <span className="text-[10px] font-bold text-slate-400 font-mono tracking-wider">{entry.partnerPhone || "---"}</span>
-                                            </div>
-                                        </td>
-                                        <td className="px-5 py-4 text-center">
-                                            <span className="text-sm font-black font-mono text-slate-900 dark:text-white">{entry.netAmount.toLocaleString()}</span>
-                                        </td>
-                                        <td className="px-5 py-4 text-center">
-                                            <span className="text-sm font-black font-mono text-emerald-600 dark:text-emerald-400">{entry.paidAmount.toLocaleString()}</span>
-                                        </td>
-                                        <td className="px-5 py-4 text-center">
-                                            <span className="text-sm font-black font-mono text-rose-600 dark:text-rose-400">{entry.remainingAmount.toLocaleString()}</span>
-                                        </td>
-                                        <td className="px-5 py-4 text-center">
-                                            <span className={cn(
-                                                "inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-black",
-                                                STATUS_COLORS[entry.paymentStatus]
-                                            )}>
-                                                {entry.paymentStatus}
-                                            </span>
-                                        </td>
-                                        <td className="px-5 py-4">
-                                            <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                                                <button onClick={() => setSelectedEntry(entry)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-xl transition-all"><FileText size={16} /></button>
-                                                <button onClick={() => doPrint(entry)} className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 rounded-xl transition-all"><Printer size={16} /></button>
-                                                <button onClick={() => handleEdit(entry)} className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-500/10 rounded-xl transition-all"><Edit3 size={16} /></button>
-                                                <button onClick={() => handleDelete(entry)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-xl transition-all"><Trash2 size={16} /></button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
                 ) : (
-                    /* Mobile Card View */
-                    <div className="grid grid-cols-1 gap-4">
-                        {filteredEntries.map((entry) => (
-                            <motion.div
-                                key={entry.id}
-                                layout
-                                className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden"
-                            >
-                                <div className="p-4 flex items-center justify-between border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30">
-                                    <div className="flex items-center gap-3">
-                                        <div className={cn(
-                                            "w-10 h-10 rounded-2xl flex items-center justify-center",
-                                            entry.entryType === 'manual_sale' || entry.entryType === 'receipt' ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-500/10" : "bg-rose-100 text-rose-600 dark:bg-rose-500/10"
+                    <>
+                        {/* Desktop Table View */}
+                        <div className={cn(
+                            "bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-x-auto",
+                            viewMode === 'table' ? "hidden md:block" : "hidden"
+                        )}>
+                            <table className="w-full text-right border-collapse">
+                                <thead>
+                                    <tr className="bg-slate-50 dark:bg-slate-800/50">
+                                        <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-16"># المرجع</th>
+                                        <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">نوع العملية</th>
+                                        <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">الطرف (عميل/مورد)</th>
+                                        <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">المبلغ الصافي</th>
+                                        <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">الحالة</th>
+                                        <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">الصندوق</th>
+                                        <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">بواسطة</th>
+                                        <th className="px-5 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">الإجراءات</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                    {filteredEntries.map((entry) => (
+                                        <tr key={entry.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/20 transition-colors group">
+                                            <td className="px-5 py-4">
+                                                <span className="text-xs font-black text-slate-400 group-hover:text-blue-600 transition-colors">{entry.referenceNumber || "---"}</span>
+                                            </td>
+                                            <td className="px-5 py-4">
+                                                <div className="flex items-center gap-2">
+                                                    <div className={cn(
+                                                        "w-2 h-2 rounded-full",
+                                                        entry.entryType === 'manual_sale' || entry.entryType === 'receipt' ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.3)]" : "bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.3)]"
+                                                    )} />
+                                                    <span className="text-sm font-black text-slate-700 dark:text-slate-200">{ENTRY_TYPE_LABELS[entry.entryType]}</span>
+                                                </div>
+                                                <p className="text-[10px] font-bold text-slate-400 mt-0.5">
+                                                    {entry.createdAt ? safeNewDate(entry.createdAt).toISOString().slice(0, 10) : "---"}
+                                                </p>
+                                            </td>
+                                            <td className="px-5 py-4">
+                                                <div className="flex flex-col">
+                                                    <span className="text-sm font-black text-slate-900 dark:text-white capitalize">{entry.partnerName}</span>
+                                                    <span className="text-[10px] font-bold text-slate-400 font-mono tracking-wider">{entry.partnerPhone || "---"}</span>
+                                                </div>
+                                            </td>
+                                            <td className="px-5 py-4 text-center">
+                                                <span className="text-sm font-black font-mono text-slate-900 dark:text-white">{entry.netAmount.toLocaleString()}</span>
+                                            </td>
+                                            <td className="px-5 py-4 text-center">
+                                                <span className={cn(
+                                                    "inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-black",
+                                                    STATUS_COLORS[entry.paymentStatus]
+                                                )}>
+                                                    {entry.paymentStatus}
+                                                </span>
+                                            </td>
+                                            <td className="px-5 py-4 text-center">
+                                                <span className="text-[11px] font-black text-slate-500">{entry.cashBoxName || "---"}</span>
+                                            </td>
+                                            <td className="px-5 py-4 text-center">
+                                                <span className="text-[11px] font-black text-slate-500">{users.find(u => u.id === entry.createdBy)?.name || entry.createdBy}</span>
+                                            </td>
+                                            <td className="px-5 py-4">
+                                                <div className="flex items-center justify-center gap-2 transition-all">
+                                                    <button onClick={() => setSelectedEntry(entry)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-xl transition-all"><FileText size={16} /></button>
+                                                    <button onClick={() => doPrint(entry)} className="p-2 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 rounded-xl transition-all"><Printer size={16} /></button>
+                                                    <button onClick={() => handleEdit(entry)} className="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-500/10 rounded-xl transition-all"><Edit3 size={16} /></button>
+                                                    <button onClick={() => handleDelete(entry)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-xl transition-all"><Trash2 size={16} /></button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* Mobile Card View */}
+                        <div className={cn(
+                            "grid grid-cols-1 gap-4",
+                            viewMode === 'table' ? "md:hidden" : "grid-cols-1 md:grid-cols-2 lg:grid-cols-3"
+                        )}>
+                            {filteredEntries.map((entry) => (
+                                <motion.div
+                                    key={entry.id}
+                                    layout
+                                    className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden"
+                                >
+                                    <div className="p-4 flex items-center justify-between border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30">
+                                        <div className="flex items-center gap-3">
+                                            <div className={cn(
+                                                "w-10 h-10 rounded-2xl flex items-center justify-center",
+                                                entry.entryType === 'manual_sale' || entry.entryType === 'receipt' ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-500/10" : "bg-rose-100 text-rose-600 dark:bg-rose-500/10"
+                                            )}>
+                                                <FileText size={20} />
+                                            </div>
+                                            <div>
+                                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">#{entry.referenceNumber || "---"}</span>
+                                                <h4 className="text-sm font-black text-slate-900 dark:text-white leading-tight">{ENTRY_TYPE_LABELS[entry.entryType]}</h4>
+                                            </div>
+                                        </div>
+                                        <span className={cn(
+                                            "px-2.5 py-1 rounded-xl text-[10px] font-black",
+                                            STATUS_COLORS[entry.paymentStatus]
                                         )}>
-                                            <FileText size={20} />
-                                        </div>
-                                        <div>
-                                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">#{entry.referenceNumber || "---"}</span>
-                                            <h4 className="text-sm font-black text-slate-900 dark:text-white leading-tight">{ENTRY_TYPE_LABELS[entry.entryType]}</h4>
-                                        </div>
-                                    </div>
-                                    <span className={cn(
-                                        "px-2.5 py-1 rounded-xl text-[10px] font-black",
-                                        STATUS_COLORS[entry.paymentStatus]
-                                    )}>
-                                        {entry.paymentStatus}
-                                    </span>
-                                </div>
-
-                                <div className="p-4 space-y-4">
-                                    <div className="flex items-center justify-between">
-                                        <div className="space-y-0.5">
-                                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider">الطرف</p>
-                                            <p className="text-sm font-black text-slate-900 dark:text-white">{entry.partnerName}</p>
-                                            <p className="text-[10px] font-bold text-slate-500 font-mono tracking-tighter">{entry.partnerPhone || "لا يوجد هاتف"}</p>
-                                        </div>
-                                        <div className="text-left space-y-0.5">
-                                            <p className="text-[9px] font-black text-blue-500 uppercase tracking-wider">الصافي</p>
-                                            <p className="text-lg font-black font-mono text-slate-900 dark:text-white leading-none">{entry.netAmount.toLocaleString()}</p>
-                                            <p className="text-[9px] font-black text-slate-400">YER</p>
-                                        </div>
+                                            {entry.paymentStatus}
+                                        </span>
                                     </div>
 
-                                    <div className="grid grid-cols-2 gap-3 py-3 border-y border-slate-100 dark:border-slate-800">
-                                        <div className="flex flex-col items-center">
-                                            <p className="text-[8px] font-black text-slate-400 uppercase mb-0.5">المدفوع</p>
-                                            <p className="text-sm font-black font-mono text-emerald-600 dark:text-emerald-400">{entry.paidAmount.toLocaleString()}</p>
+                                    <div className="p-4 space-y-4">
+                                        <div className="flex items-center justify-between">
+                                            <div className="space-y-0.5">
+                                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider">الطرف</p>
+                                                <p className="text-sm font-black text-slate-900 dark:text-white">{entry.partnerName}</p>
+                                                <p className="text-[10px] font-bold text-slate-500 font-mono tracking-tighter">{entry.partnerPhone || "لا يوجد هاتف"}</p>
+                                            </div>
+                                            <div className="text-left space-y-0.5">
+                                                <p className="text-[9px] font-black text-blue-500 uppercase tracking-wider">الصافي</p>
+                                                <p className="text-lg font-black font-mono text-slate-900 dark:text-white leading-none">{entry.netAmount.toLocaleString()}</p>
+                                                <p className="text-[9px] font-black text-slate-400">YER</p>
+                                            </div>
                                         </div>
-                                        <div className="flex flex-col items-center">
-                                            <p className="text-[8px] font-black text-slate-400 uppercase mb-0.5">المتبقي</p>
-                                            <p className="text-sm font-black font-mono text-rose-600 dark:text-rose-400">{entry.remainingAmount.toLocaleString()}</p>
+
+                                        <div className="grid grid-cols-2 gap-3 py-3 border-y border-slate-100 dark:border-slate-800">
+                                            <div className="flex flex-col items-center">
+                                                <p className="text-[8px] font-black text-slate-400 uppercase mb-0.5">المدفوع</p>
+                                                <p className="text-sm font-black font-mono text-emerald-600 dark:text-emerald-400">{entry.paidAmount.toLocaleString()}</p>
+                                            </div>
+                                            <div className="flex flex-col items-center">
+                                                <p className="text-[8px] font-black text-slate-400 uppercase mb-0.5">المتبقي</p>
+                                                <p className="text-sm font-black font-mono text-rose-600 dark:text-rose-400">{entry.remainingAmount.toLocaleString()}</p>
+                                            </div>
+                                        </div>
+
+                                        {entry.notes && (
+                                            <div className="bg-blue-50/30 dark:bg-blue-500/5 p-3 rounded-2xl border border-blue-500/10">
+                                                <p className="text-[10px] text-slate-600 dark:text-slate-400 font-bold leading-relaxed italic">{entry.notes}</p>
+                                            </div>
+                                        )}
+
+                                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between pt-2 gap-3">
+                                            <p className="text-[9px] font-bold text-slate-400 flex items-center gap-1.5 whitespace-nowrap w-full sm:w-auto overflow-hidden text-ellipsis">
+                                                <Calendar size={12} className="shrink-0" /> {format(safeNewDate(entry.createdAt), "do MMM h:mm a", { locale: ar })}
+                                            </p>
+                                            <div className="flex gap-1.5 md:gap-2 w-full sm:w-auto overflow-x-auto pb-1 no-scrollbar justify-end">
+                                                <button onClick={() => setSelectedEntry(entry)} className="p-2 md:p-3 shrink-0 bg-slate-50 dark:bg-slate-800 rounded-2xl text-slate-500 hover:text-blue-500 transition-all shadow-sm"><FileText size={18} /></button>
+                                                <button onClick={() => doPrint(entry)} className="p-2 md:p-3 shrink-0 bg-slate-50 dark:bg-slate-800 rounded-2xl text-slate-500 hover:text-emerald-500 transition-all shadow-sm"><Printer size={18} /></button>
+                                                <button onClick={() => handleEdit(entry)} className="p-2 md:p-3 shrink-0 bg-slate-50 dark:bg-slate-800 rounded-2xl text-slate-500 hover:text-amber-500 transition-all shadow-sm"><Edit3 size={18} /></button>
+                                                <button onClick={() => handleDelete(entry)} className="p-2 md:p-3 shrink-0 bg-rose-50 dark:bg-rose-500/10 rounded-2xl text-rose-500 hover:bg-rose-100 transition-all shadow-xl shadow-rose-500/5"><Trash2 size={18} /></button>
+                                            </div>
                                         </div>
                                     </div>
-
-                                    {entry.notes && (
-                                        <div className="bg-blue-50/30 dark:bg-blue-500/5 p-3 rounded-2xl border border-blue-500/10">
-                                            <p className="text-[10px] text-slate-600 dark:text-slate-400 font-bold leading-relaxed italic">{entry.notes}</p>
-                                        </div>
-                                    )}
-
-                                    <div className="flex items-center justify-between pt-2">
-                                        <p className="text-[9px] font-bold text-slate-400 flex items-center gap-1.5">
-                                            <Calendar size={12} /> {format(new Date(entry.createdAt || ""), "do MMM h:mm a", { locale: ar })}
-                                        </p>
-                                        <div className="flex gap-2">
-                                            <button onClick={() => setSelectedEntry(entry)} className="p-3 bg-slate-50 dark:bg-slate-800 rounded-2xl text-slate-500 hover:text-blue-500 transition-all shadow-sm"><FileText size={18} /></button>
-                                            <button onClick={() => doPrint(entry)} className="p-3 bg-slate-50 dark:bg-slate-800 rounded-2xl text-slate-500 hover:text-emerald-500 transition-all shadow-sm"><Printer size={18} /></button>
-                                            <button onClick={() => handleEdit(entry)} className="p-3 bg-slate-50 dark:bg-slate-800 rounded-2xl text-slate-500 hover:text-amber-500 transition-all shadow-sm"><Edit3 size={18} /></button>
-                                            <button onClick={() => handleDelete(entry)} className="p-3 bg-rose-50 dark:bg-rose-500/10 rounded-2xl text-rose-500 hover:bg-rose-100 transition-all shadow-xl shadow-rose-500/5"><Trash2 size={18} /></button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </motion.div>
-                        ))}
-                    </div>
+                                </motion.div>
+                            ))}
+                        </div>
+                    </>
                 )}
                 
                 {hasMore && (
@@ -604,7 +732,7 @@ export default function QuickEntriesHistory({ onNavigate }: QuickEntriesHistoryP
                                     <div className="space-y-1">
                                         <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">التاريخ</p>
                                         <p className="font-bold text-slate-700 dark:text-slate-300 text-sm">
-                                            {format(new Date(selectedEntry.createdAt || ""), "PPP p", { locale: ar })}
+                                            {format(safeNewDate(selectedEntry.createdAt), "PPP p", { locale: ar })}
                                         </p>
                                     </div>
                                 </div>

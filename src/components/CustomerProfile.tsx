@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
-import { ArrowRight, Phone, MapPin, Receipt, Wallet, Calendar, Sparkles, Save, Edit, Eye, UserPlus, Printer, FileText, FileDown } from "lucide-react";
+import { ArrowRight, Phone, MapPin, Receipt, Wallet, Calendar, Sparkles, Save, Edit, Eye, UserPlus, Printer, FileText, FileDown, Trash2 } from "lucide-react";
 import { dbService } from "../services/db";
+import { syncEngine } from "../services/syncEngine";
 import { Customer, Supplier, Invoice, Transaction, OpticalCustomerProfileData } from "../types";
-import { cn } from "../lib/utils";
+import { cn, hasPermission } from "../lib/utils";
+import PrintPreviewModal from "./PrintPreviewModal";
 
 interface CustomerProfileProps {
     partnerId: string;
@@ -27,6 +29,14 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
     const [updating, setUpdating] = useState(false);
     const [printFormat, setPrintFormat] = useState<'a4' | 'thermal' | 'pdf'>('a4');
 
+    // Print Preview State
+    const [printPreview, setPrintPreview] = useState<{
+        isOpen: boolean;
+        html: string;
+        title: string;
+        size: 'a4' | 'thermal';
+    }>({ isOpen: false, html: '', title: '', size: 'a4' });
+
     const loadData = async () => {
         const collName = partnerType === 'customer' ? "customers" : "suppliers";
         const [allP, allI, allT] = await Promise.all([
@@ -50,23 +60,232 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
             }
         }
 
-        setInvoices(allI.filter(i => i.partnerId === partnerId));
-        setTransactions(allT.filter(t => t.partnerId === partnerId));
+        const filteredInvoices = allI.filter(i => i.partnerId === partnerId);
+        const filteredTransactions = allT.filter(t => t.partnerId === partnerId);
+
+        setInvoices(filteredInvoices);
+        setTransactions(filteredTransactions);
+
+        // Auto-reconcile balance to repair any historical or deleted invoice mismatches
+        if (p) {
+            const activeInvs = filteredInvoices.filter(i => i.recordStatus !== 'deleted' && (i.lifecycleStatus === 'معتمد' || !i.lifecycleStatus));
+            const activeInvIds = new Set(activeInvs.map(i => i.id).filter(Boolean));
+            
+            const activeTrans = filteredTransactions.filter(t => {
+                if (t.recordStatus === 'deleted') return false;
+                if (t.sourceId && (t.sourceType === 'sales_invoice' || t.sourceType === 'purchase_invoice' || t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment')) {
+                    if (!activeInvIds.has(t.sourceId)) {
+                        return false;
+                    }
+                }
+                return true;
+            });
+
+            const totalPurch = activeInvs.reduce((acc, curr) => acc + (curr.total - (curr.discount || 0)), 0);
+            const totalPay = activeTrans
+                .filter(t => t.sourceType !== 'sales_invoice' && t.sourceType !== 'purchase_invoice')
+                .filter(t => partnerType === 'customer' 
+                    ? t.type === 'قبض' 
+                    : t.type === 'صرف'
+                )
+                .reduce((acc, curr) => acc + curr.amount, 0);
+
+            const calcBal = totalPurch - totalPay;
+
+            // Removing auto-reconciliation as requested: UI should not update balances directly.
+            if (p.balance !== calcBal) {
+                console.warn(`Balance mismatch detected for ${partnerId}. DB: ${p.balance}, Calculated: ${calcBal}`);
+                // Only update local state for display if needed, but do not write to DB.
+                // p.balance = calcBal;
+                // setPartner({ ...p });
+            }
+        }
     };
 
     useEffect(() => {
         loadData();
+        const unsubscribe = syncEngine.subscribe('DATA_CHANGED', () => {
+            loadData();
+        });
+        return unsubscribe;
     }, [partnerId, partnerType]);
+
+    const handleDeleteTransaction = async (transId: string) => {
+        if (!hasPermission(null, 'global_delete')) {
+            alert("عذراً، لا تملك الصلاحيات لحذف السندات المالية من الحساب. (خاص بالمدير)");
+            return;
+        }
+
+        if (window.confirm("هل أنت متأكد من رغبتك في حذف هذا السند؟ سيتم عكس تأثيره المالي من حساب العميل والفاتورة المرتبطة إن وجدت.")) {
+            try {
+                const transToDelete = transactions.find(t => t.id === transId);
+                if (transToDelete) {
+                    await dbService.deleteTransactionData(transToDelete);
+                    alert("تم حذف السند بنجاح.");
+                    loadData();
+                }
+            } catch (error: any) {
+                alert(error.message || "خطأ أثناء حذف السند");
+            }
+        }
+    };
 
     if (!partner) return <div className="p-10 text-center text-slate-400 font-bold block text-sm">جاري تنزيل الملف...</div>;
 
-    const totalPurchases = invoices.filter(i => i.lifecycleStatus === 'معتمد' || !i.lifecycleStatus).reduce((acc, curr) => acc + (curr.total - curr.discount), 0);
-    const totalPayments = transactions.reduce((acc, curr) => acc + curr.amount, 0);
+    const activeInvoices = invoices.filter(i => i.recordStatus !== 'deleted' && (i.lifecycleStatus === 'معتمد' || !i.lifecycleStatus));
+    const activeInvoiceIds = new Set(activeInvoices.map(i => i.id).filter(Boolean));
 
-    const timeline = [
-        ...invoices.map(i => ({ type: 'invoice', date: i.createdAt, amount: (i.total - i.discount), notes: `فاتورة رقم ${i.id?.slice(0, 6)} - ${i.items.length} منتجات` })),
-        ...transactions.map(t => ({ type: 'transaction', date: t.createdAt, amount: t.amount, notes: t.description || 'حركة مالية' }))
-    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const activeTransactions = transactions.filter(t => {
+        if (t.recordStatus === 'deleted') return false;
+        
+        // Dynamic cleanup: ignore payments/receipts whose referenced invoice has been deleted
+        if (t.sourceId && (t.sourceType === 'sales_invoice' || t.sourceType === 'purchase_invoice' || t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment')) {
+            if (!activeInvoiceIds.has(t.sourceId)) {
+                return false;
+            }
+        }
+        return true;
+    });
+
+    const totalPurchases = activeInvoices.reduce((acc, curr) => acc + (curr.total - (curr.discount || 0)), 0);
+    
+    // Real payments received from customer or made to supplier (excluding invoice proof transactions to avoid double counting)
+    const totalPayments = activeTransactions
+        .filter(t => t.sourceType !== 'sales_invoice' && t.sourceType !== 'purchase_invoice')
+        .filter(t => partnerType === 'customer' 
+            ? t.type === 'قبض' 
+            : t.type === 'صرف'
+        )
+        .reduce((acc, curr) => acc + curr.amount, 0);
+
+    const calculatedBalance = totalPurchases - totalPayments;
+
+    // Build the clean Accounting Ledger (دفتر أستاذ تفصيلي)
+    const ledgerItems: any[] = [];
+
+    // 1. Add invoices as Debit entries (for customer) or Credit entries (for supplier)
+    activeInvoices.forEach(i => {
+        const netAmount = i.total - (i.discount || 0);
+        ledgerItems.push({
+            id: i.id,
+            date: i.createdAt,
+            description: i.type === 'sale' ? `فاتورة مبيعات رقم #${i.invoiceNumber || i.id?.slice(0, 6).toUpperCase()}` : `فاتورة مشتريات رقم #${i.invoiceNumber || i.id?.slice(0, 6).toUpperCase()}`,
+            debit: partnerType === 'customer' ? netAmount : 0,
+            credit: partnerType === 'supplier' ? netAmount : 0,
+        });
+    });
+
+    // 2. Add transactions (excluding invoice proofs to avoid duplicates)
+    activeTransactions.forEach(t => {
+        if (t.sourceType === 'sales_invoice' || t.sourceType === 'purchase_invoice') return;
+
+        let debit = 0;
+        let credit = 0;
+        
+        if (partnerType === 'customer') {
+            if (t.type === 'قبض') {
+                credit = t.amount;
+            } else {
+                debit = t.amount;
+            }
+        } else {
+            if (t.type === 'صرف') {
+                debit = t.amount;
+            } else {
+                credit = t.amount;
+            }
+        }
+
+        ledgerItems.push({
+            id: t.id,
+            sourceId: t.sourceId,
+            date: t.createdAt,
+            description: t.description || (t.type === 'قبض' ? 'سند قبض نقدي' : 'سند صرف نقدي'),
+            debit,
+            credit
+        });
+    });
+
+    // Sort by date ascending to compute running balance chronologically
+    ledgerItems.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    let runningBalance = 0;
+    const timeline = ledgerItems.map(item => {
+        if (partnerType === 'customer') {
+            runningBalance += (item.debit - item.credit);
+        } else {
+            runningBalance += (item.credit - item.debit);
+        }
+        return {
+            ...item,
+            balance: runningBalance
+        };
+    });
+
+    const displayTimeline = [...timeline].reverse();
+
+    // Build a beautiful consolidated visual timeline (سجل المبيعات والمدفوعات البصرية الموحد)
+    const visualTimeline: any[] = [];
+
+    // Add active invoices as single consolidated cards
+    activeInvoices.forEach(i => {
+        const netAmount = i.total - (i.discount || 0);
+        visualTimeline.push({
+            id: i.id,
+            type: 'invoice',
+            date: i.createdAt,
+            title: i.type === 'sale' ? 'فاتورة مبيعات بصريات' : 'فاتورة مشتريات',
+            description: i.type === 'sale' ? `فاتورة مبيعات رقم #${i.invoiceNumber || i.id?.slice(0, 6).toUpperCase()}` : `فاتورة مشتريات رقم #${i.invoiceNumber || i.id?.slice(0, 6).toUpperCase()}`,
+            total: i.total,
+            discount: i.discount || 0,
+            netAmount: netAmount,
+            paid: i.paid || 0,
+            remaining: netAmount - (i.paid || 0),
+            notes: i.notes || '',
+        });
+    });
+
+    // Add standalone or subsequent transactions
+    activeTransactions.forEach(t => {
+        if (t.sourceType === 'sales_invoice' || t.sourceType === 'purchase_invoice') return;
+        
+        // Skip initial payments linked to active invoices since they are already summarized inside the invoice cards
+        const isInitialPayment = (t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment') && 
+            activeInvoices.some(i => i.id === t.sourceId);
+        if (isInitialPayment) return;
+
+        visualTimeline.push({
+            id: t.id,
+            type: 'transaction',
+            date: t.createdAt,
+            title: t.type === 'قبض' ? 'سند قبض نقدي' : 'سند صرف نقدي',
+            description: t.description || (t.type === 'قبض' ? 'سند قبض نقدي' : 'سند صرف نقدي'),
+            amount: t.amount,
+        });
+    });
+
+    // Sort visual timeline descending by date (newest first)
+    visualTimeline.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    // Link each visual timeline item to its accurate ledger running balance at that point in time
+    const visualTimelineWithBalance = visualTimeline.map(item => {
+        let ledgerMatch;
+        if (item.type === 'invoice') {
+            // If the invoice has an initial payment, its final running balance is the balance after that payment transaction
+            const paymentMatch = timeline.find(x => 
+                (x.id === item.id || x.sourceId === item.id) && 
+                (x.credit > 0 || x.debit > 0) &&
+                x.id !== item.id
+            );
+            ledgerMatch = paymentMatch || timeline.find(x => x.id === item.id);
+        } else {
+            ledgerMatch = timeline.find(x => x.id === item.id);
+        }
+        return {
+            ...item,
+            balance: ledgerMatch ? ledgerMatch.balance : calculatedBalance
+        };
+    });
 
     const saveOpticalProfile = async () => {
         setUpdating(true);
@@ -88,20 +307,6 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
     const handlePrintStatement = () => {
         if (!partner) return;
 
-        // Open a new blank window to isolate styles and print cleanly
-        const printWindow = window.open('', '_blank');
-        if (!printWindow) {
-            alert("يرجى السماح بالنوافذ المنبثقة لطباعة كشف الحساب");
-            return;
-        }
-
-        // Set page or document title to match customer name for PDF download suggestion
-        if (printFormat === 'pdf') {
-            printWindow.document.title = `كشف حساب - ${partner.name}`;
-        } else {
-            printWindow.document.title = `تقرير كشف حساب - ${partner.name}`;
-        }
-
         const dateStr = new Date().toLocaleDateString('ar-YE', { 
             weekday: 'long', 
             year: 'numeric', 
@@ -116,31 +321,7 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
         if (printFormat === 'thermal') {
             // Cashier/Thermal (80mm) receipt format
             printHTML = `
-                <!DOCTYPE html>
-                <html dir="rtl" lang="ar">
-                <head>
-                    <meta charset="utf-8">
-                    <title>كشف حساب حراري - ${partner.name}</title>
                     <style>
-                        @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap');
-                        @page {
-                            size: 80mm auto;
-                            margin: 0;
-                        }
-                        body {
-                            font-family: 'Cairo', sans-serif;
-                            color: #000000;
-                            background-color: #ffffff;
-                            margin: 0;
-                            padding: 4mm 3mm;
-                            width: 74mm;
-                            direction: rtl;
-                            font-size: 11px;
-                            line-height: 1.4;
-                            -webkit-print-color-adjust: exact;
-                            print-color-adjust: exact;
-                        }
-                        .text-center { text-align: center; }
                         .thermal-header {
                             text-align: center;
                             border-bottom: 2px dashed #000000;
@@ -229,8 +410,6 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
                             font-size: 9px;
                         }
                     </style>
-                </head>
-                <body>
                     <div class="thermal-header">
                         <div class="store-logo">مركز البصريات الحديث المتطور</div>
                         <div style="font-size: 10px; font-weight: bold;">سند كشف حساب محاسبي مبسط</div>
@@ -274,21 +453,25 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
                     </div>
                     ` : ''}
 
-                    <div class="table-title">سجل المعاملات والمدفوعات</div>
+                    <div class="table-title">كشف حساب تفصيلي (مدين / دائن)</div>
                     <table class="thermal-table">
                         <thead>
                             <tr>
-                                <th style="width: 25%;">التاريخ</th>
-                                <th style="width: 45%;">نوع الحركة</th>
-                                <th style="width: 30%; text-align: left;">المبلغ</th>
+                                <th style="width: 22%;">التاريخ</th>
+                                <th style="width: 33%;">البيان</th>
+                                <th style="width: 15%; text-align: left;">عليه</th>
+                                <th style="width: 15%; text-align: left;">له</th>
+                                <th style="width: 15%; text-align: left;">رصيد</th>
                             </tr>
                         </thead>
                         <tbody>
-                            ${timeline.slice(0, 20).map(item => `
+                            ${displayTimeline.slice(0, 30).map(item => `
                                 <tr>
                                     <td>${new Date(item.date).toLocaleDateString('ar-YE', {month: 'numeric', day: 'numeric'})}</td>
-                                    <td>${item.type === 'invoice' ? 'فاتورة بيع' : 'سند مالي'}</td>
-                                    <td style="text-align: left; font-family: monospace; font-weight: bold;">${(item.amount || 0).toLocaleString()}</td>
+                                    <td>${item.description}</td>
+                                    <td style="text-align: left; font-family: monospace;">${item.debit > 0 ? item.debit.toLocaleString() : '-'}</td>
+                                    <td style="text-align: left; font-family: monospace;">${item.credit > 0 ? item.credit.toLocaleString() : '-'}</td>
+                                    <td style="text-align: left; font-family: monospace; font-weight: bold;">${item.balance.toLocaleString()}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -297,35 +480,27 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
                     <div class="footer">
                         <div>شكراً لتعاملكم الراقي معنا</div>
                         <div style="font-weight: 900; margin-top: 3px; font-size: 10px;">مركز البصريات الحديث المتطور</div>
-                        <div style="font-size: 8px; color: #475569; margin-top: 4px;">نظام البصريات الذكي الحديث</div>
+                        <div style="font-size: 8px; color: #475569; margin-top: 4px;">Generated by ASSAR Optical Accounting<br>Designed & Developed By Mohammed Assubaihi | 779391682</div>
                     </div>
-
-                    <script>
-                        window.onload = function() {
-                            setTimeout(() => {
-                                window.print();
-                                window.close();
-                            }, 500);
-                        };
-                    </script>
-                </body>
-                </html>
             `;
         } else {
             // Professional A4 Format (also used for PDF export format)
-            const timelineRows = timeline.map(item => `
+            const timelineRows = displayTimeline.map(item => `
                 <tr>
                     <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: bold; font-size: 12px;">
                         ${new Date(item.date).toLocaleDateString('ar-YE')}
                     </td>
-                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold; color: ${item.type === 'invoice' ? '#4f46e5' : '#059669'};">
-                        ${item.type === 'invoice' ? 'فاتورة مبيعات بصريات' : 'سند قبض نقدي / دفع'}
+                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-weight: bold; color: #1e293b;">
+                        ${item.description}
                     </td>
-                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: 800; font-size: 13px; text-align: left;">
-                        ${(item.amount || 0).toLocaleString()} YER
+                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: 800; font-size: 13px; text-align: left; color: #b91c1c;">
+                        ${item.debit > 0 ? item.debit.toLocaleString() : '-'}
                     </td>
-                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; color: #475569; font-size: 11px;">
-                        ${item.notes || '-'}
+                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: 800; font-size: 13px; text-align: left; color: #047857;">
+                        ${item.credit > 0 ? item.credit.toLocaleString() : '-'}
+                    </td>
+                    <td style="padding: 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: 900; font-size: 13px; text-align: left;">
+                        ${item.balance.toLocaleString()}
                     </td>
                 </tr>
             `).join('');
@@ -359,23 +534,7 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
             ` : '';
 
             printHTML = `
-                <!DOCTYPE html>
-                <html dir="rtl" lang="ar">
-                <head>
-                    <meta charset="utf-8">
-                    <title>تقرير كشف حساب - ${partner.name}</title>
                     <style>
-                        @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap');
-                        body {
-                            font-family: 'Cairo', sans-serif;
-                            color: #1e293b;
-                            background-color: #ffffff;
-                            margin: 0;
-                            padding: 35px;
-                            direction: rtl;
-                            -webkit-print-color-adjust: exact;
-                            print-color-adjust: exact;
-                        }
                         .header {
                             display: flex;
                             justify-content: space-between;
@@ -527,14 +686,7 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
                             margin-top: 35px;
                             padding-top: 4px;
                         }
-                        @media print {
-                            body {
-                                padding: 15px;
-                            }
-                        }
                     </style>
-                </head>
-                <body>
                     <div class="header">
                         <div>
                             <div class="store-logo">مركز البصريات الحديث المتطور</div>
@@ -582,47 +734,41 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
 
                     ${opticalSection}
 
-                    <div class="section-title">سجل الحركات المالية والمبيعات التاريخية</div>
+                    <div class="section-title">كشف حساب تفصيلي (مدين / دائن)</div>
                     <table class="table">
                         <thead>
                             <tr>
-                                <th style="width: 15%;">تاريخ الحركة</th>
-                                <th style="width: 25%;">نوع الحركة</th>
-                                <th style="width: 20%; text-align: left;">المبلغ</th>
-                                <th style="width: 40%;">ملاحظات وتفاصيل المعاملة</th>
+                                <th style="width: 15%;">التاريخ</th>
+                                <th style="width: 40%;">البيان والتفاصيل</th>
+                                <th style="width: 15%; text-align: left;">مدين (عليه)</th>
+                                <th style="width: 15%; text-align: left;">دائن (له)</th>
+                                <th style="width: 15%; text-align: left;">الرصيد</th>
                             </tr>
                         </thead>
                         <tbody>
-                            ${timelineRows.length > 0 ? timelineRows : '<tr><td colspan="4" style="text-align: center; color: #94a3b8; padding: 20px;">لا يوجد أي عمليات مدونة في الأرشيف المالي للعميل.</td></tr>'}
+                            ${timelineRows.length > 0 ? timelineRows : '<tr><td colspan="5" style="text-align: center; color: #94a3b8; padding: 20px;">لا يوجد أي عمليات مدونة في الأرشيف المالي للعميل.</td></tr>'}
                         </tbody>
                     </table>
 
                     <div class="footer">
                         <div>
                             نظام إدارة البصريات الذكي - تم توليد التقرير إلكترونياً
+                            <div style="font-size: 9px; font-weight: bold; margin-top: 5px;">Generated by ASSAR Optical Accounting<br>Designed & Developed By Mohammed Assubaihi | Mobile: 779391682</div>
                         </div>
                         <div class="signature-box">
                             توقيع المحاسب / الإدارة
                             <div class="signature-line"></div>
                         </div>
                     </div>
-
-                    <script>
-                        window.onload = function() {
-                            setTimeout(() => {
-                                window.print();
-                                window.close();
-                            }, 500);
-                        };
-                    </script>
-                </body>
-                </html>
             `;
         }
 
-        printWindow.document.open();
-        printWindow.document.write(printHTML);
-        printWindow.document.close();
+        setPrintPreview({
+            isOpen: true,
+            html: printHTML,
+            title: `كشف حساب - ${partner.name}`,
+            size: printFormat === 'thermal' ? 'thermal' : 'a4'
+        });
     };
 
     return (
@@ -639,6 +785,14 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
                 </div>
             </header>
 
+            <PrintPreviewModal 
+                isOpen={printPreview.isOpen}
+                onClose={() => setPrintPreview(prev => ({ ...prev, isOpen: false }))}
+                htmlContent={printPreview.html}
+                title={printPreview.title}
+                paperSize={printPreview.size}
+            />
+
             <div className="flex-1 overflow-y-auto p-4 space-y-6 lg:space-y-0 lg:grid lg:grid-cols-12 lg:gap-6 bg-white dark:bg-[#0b0f19] transition-colors">
                 
                 {/* Column 1: Financial & Optometric Details */}
@@ -647,15 +801,15 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
                     <div className="grid grid-cols-2 gap-3">
                         <div className={cn(
                             "p-4 rounded-2xl border flex flex-col justify-between transition-colors", 
-                            partner.balance > 0 
+                            calculatedBalance > 0 
                                 ? "bg-rose-50/70 border-rose-100 dark:bg-rose-500/5 dark:border-rose-500/20" 
                                 : "bg-emerald-50/70 border-emerald-100 dark:bg-emerald-500/5 dark:border-emerald-500/20"
                         )}>
-                            <span className={cn("text-[9px] uppercase font-black mb-1", partner.balance > 0 ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400")}>
+                            <span className={cn("text-[9px] uppercase font-black mb-1", calculatedBalance > 0 ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400")}>
                                 الرصيد المستحق
                             </span>
-                            <span className={cn("font-mono font-black text-sm sm:text-base tracking-tighter", partner.balance > 0 ? "text-rose-950 dark:text-rose-200" : "text-emerald-950 dark:text-emerald-200")}>
-                                {(partner.balance || 0).toLocaleString()} <span className="text-[10px]">YER</span>
+                            <span className={cn("font-mono font-black text-sm sm:text-base tracking-tighter", calculatedBalance > 0 ? "text-rose-950 dark:text-rose-200" : "text-emerald-950 dark:text-emerald-200")}>
+                                {(calculatedBalance || 0).toLocaleString()} <span className="text-[10px]">YER</span>
                             </span>
                         </div>
                         
@@ -670,7 +824,7 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
 
                         <div className="col-span-2 p-3 rounded-xl border bg-blue-50/70 border-blue-100 dark:bg-blue-500/10 dark:border-blue-500/20 flex items-center justify-between transition-colors">
                             <span className="text-[10px] uppercase font-black text-blue-600 dark:text-blue-400">
-                                إجمالي الدفعات المقبوضة
+                                {partnerType === 'customer' ? 'إجمالي الدفعات المقبوضة' : 'إجمالي الدفعات المصروفة'}
                             </span>
                             <span className="font-mono font-black text-xs sm:text-sm tracking-tighter text-blue-900 dark:text-blue-250">
                                 {(totalPayments || 0).toLocaleString()} YER
@@ -799,29 +953,80 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
                 <div className="lg:col-span-5 space-y-4">
                     <h3 className="text-xs font-black text-slate-800 dark:text-white mb-2 px-1 uppercase tracking-wide">سجل المبيعات والمدفوعات البصرية</h3>
                     <div className="space-y-4 relative before:content-[''] before:absolute before:right-5 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-100 dark:before:bg-slate-800/80">
-                        {timeline.map((item, idx) => (
+                        {visualTimelineWithBalance.map((item, idx) => (
                             <div key={idx} className="relative flex items-start gap-3">
                                 <div className={cn(
                                     "w-8 h-8 rounded-full flex items-center justify-center shrink-0 border-4 border-white dark:border-[#0b0f19] relative z-10 shadow-sm transition-colors",
-                                    item.type === 'invoice' ? "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400" : "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400"
+                                    item.type === 'invoice' 
+                                        ? "bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400" 
+                                        : "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400"
                                 )}>
-                                    {item.type === 'invoice' ? <Receipt size={14} /> : <Wallet size={14} />}
+                                    {item.type === 'invoice' ? <FileText size={14} /> : <Wallet size={14} />}
                                 </div>
-                                <div className="bg-white dark:bg-[#131b2e] border border-slate-100 dark:border-slate-800 shadow-sm rounded-2xl p-3 flex-1 text-xs transition-colors">
+                                <div className="bg-white dark:bg-[#131b2e] border border-slate-100 dark:border-slate-800 shadow-sm rounded-2xl p-4 flex-1 text-xs transition-colors space-y-3">
                                     <div className="flex justify-between items-start mb-1 gap-2">
-                                        <p className="text-[10px] font-black text-slate-800 dark:text-slate-200">{item.type === 'invoice' ? 'فاتورة بيع نظارة' : 'قبض نقدي / سند'}</p>
+                                        <div className="space-y-0.5">
+                                            <p className="text-[11px] font-black text-slate-850 dark:text-slate-100">{item.title}</p>
+                                            <p className="text-[9px] text-slate-400 dark:text-slate-500 font-mono">{item.description}</p>
+                                        </div>
                                         <p className="text-[9px] text-slate-400 dark:text-slate-500 font-bold flex items-center gap-0.5 shrink-0">
                                             <Calendar size={10} /> {item.date ? new Date(item.date).toLocaleDateString("ar-EG") : 'غير محدد'}
                                         </p>
                                     </div>
-                                    <div className="flex flex-col gap-0.5">
-                                        <span className="font-mono font-black text-xs text-slate-900 dark:text-white">{(item.amount || 0).toLocaleString()} YER</span>
-                                        <span className="text-[9px] text-slate-450 dark:text-slate-400 leading-normal">{item.notes}</span>
-                                    </div>
+
+                                    {item.type === 'invoice' ? (
+                                        <>
+                                            {/* Invoice Financial details */}
+                                            <div className="grid grid-cols-2 gap-2 bg-slate-50/70 dark:bg-[#0c1222] p-2.5 rounded-xl border border-slate-100/50 dark:border-slate-800/80 text-[10px]">
+                                                <div className="flex justify-between">
+                                                    <span className="text-slate-450 dark:text-slate-400 font-bold">الإجمالي:</span>
+                                                    <span className="font-mono font-black text-slate-700 dark:text-slate-300">{item.total.toLocaleString()} YER</span>
+                                                </div>
+                                                <div className="flex justify-between">
+                                                    <span className="text-slate-450 dark:text-slate-400 font-bold">الخصم:</span>
+                                                    <span className="font-mono font-black text-rose-600 dark:text-rose-400">{item.discount > 0 ? `-${item.discount.toLocaleString()}` : '0'} YER</span>
+                                                </div>
+                                                <div className="col-span-2 border-t border-dashed border-slate-200 dark:border-slate-800 my-0.5"></div>
+                                                <div className="flex justify-between">
+                                                    <span className="text-blue-600 dark:text-blue-400 font-extrabold">الصافي:</span>
+                                                    <span className="font-mono font-black text-blue-700 dark:text-blue-300">{item.netAmount.toLocaleString()} YER</span>
+                                                </div>
+                                                <div className="flex justify-between">
+                                                    <span className="text-emerald-600 dark:text-emerald-400 font-extrabold">المدفوع:</span>
+                                                    <span className="font-mono font-black text-emerald-700 dark:text-emerald-300">{item.paid.toLocaleString()} YER</span>
+                                                </div>
+                                                <div className="col-span-2 border-t border-dashed border-slate-200 dark:border-slate-800 my-0.5"></div>
+                                                <div className="flex justify-between col-span-2 text-slate-800 dark:text-slate-200">
+                                                    <span className="font-black">المتبقي بالفاتورة:</span>
+                                                    <span className="font-mono font-black text-rose-600 dark:text-rose-400">{item.remaining.toLocaleString()} YER</span>
+                                                </div>
+                                            </div>
+
+                                            <div className="flex justify-between items-center text-[9px] font-black text-slate-400 border-t border-slate-100 dark:border-slate-800 pt-2">
+                                                <span>الحالة: {item.remaining === 0 ? <span className="text-emerald-600">خالصة تماماً</span> : <span className="text-rose-600">عليها متبقي</span>}</span>
+                                                <span className="text-blue-600 dark:text-blue-400 font-black">الرصيد الجاري: {item.balance.toLocaleString()} YER</span>
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <div className="flex items-baseline gap-1 pt-1">
+                                                <span className="text-emerald-600 dark:text-emerald-400 text-[10px] font-bold">المبلغ المستلم:</span>
+                                                <span className="font-mono font-black text-xs text-emerald-700 dark:text-emerald-300">{item.amount.toLocaleString()} YER</span>
+                                            </div>
+                                            <div className="flex justify-between items-center text-[9px] font-black text-blue-600 dark:text-blue-400 border-t border-slate-100 dark:border-slate-800 pt-2 text-left">
+                                                {hasPermission(null, 'global_delete') && (
+                                                    <button onClick={() => handleDeleteTransaction(item.id)} className="text-rose-500 hover:text-rose-600 bg-rose-50 hover:bg-rose-100 dark:bg-rose-500/10 dark:hover:bg-rose-500/20 px-2 py-1 rounded-md transition-colors flex items-center gap-1 font-bold">
+                                                        <Trash2 size={10} /> حذف
+                                                    </button>
+                                                )}
+                                                <span>الرصيد الجاري: {item.balance.toLocaleString()} YER</span>
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         ))}
-                        {timeline.length === 0 && (
+                        {visualTimelineWithBalance.length === 0 && (
                             <div className="pl-6 text-center py-10 text-slate-400 dark:text-slate-600 text-xs font-bold">لا يوجد أي عمليات مدونة في الأرشيف المالي للعميل.</div>
                         )}
                     </div>

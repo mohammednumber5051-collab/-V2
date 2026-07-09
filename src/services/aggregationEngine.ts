@@ -1,5 +1,5 @@
-import { doc, increment } from "firebase/firestore";
-import { db } from "../firebase";
+import { db, doc, increment } from "../firebase";
+import firebaseConfig from "../../firebase-applet-config.json";
 
 export interface AggregationImpact {
     salesTotal?: number;
@@ -25,6 +25,23 @@ export class AggregationEngine {
     }
     static getDashboardCacheRef() {
         return doc(db, "dashboard_cache", "global");
+    }
+
+    static combineImpacts(a: AggregationImpact, b: AggregationImpact): AggregationImpact {
+        return {
+            salesTotal: (a.salesTotal || 0) + (b.salesTotal || 0),
+            purchasesTotal: (a.purchasesTotal || 0) + (b.purchasesTotal || 0),
+            receiptsTotal: (a.receiptsTotal || 0) + (b.receiptsTotal || 0),
+            paymentsTotal: (a.paymentsTotal || 0) + (b.paymentsTotal || 0),
+            expensesTotal: (a.expensesTotal || 0) + (b.expensesTotal || 0),
+            profitsTotal: (a.profitsTotal || 0) + (b.profitsTotal || 0),
+            receivablesChange: (a.receivablesChange || 0) + (b.receivablesChange || 0),
+            payablesChange: (a.payablesChange || 0) + (b.payablesChange || 0),
+            transactionCount: (a.transactionCount || 0) + (b.transactionCount || 0),
+            cashBalanceChange: (a.cashBalanceChange || 0) + (b.cashBalanceChange || 0),
+            invoicesCount: (a.invoicesCount || 0) + (b.invoicesCount || 0),
+            quickEntriesCount: (a.quickEntriesCount || 0) + (b.quickEntriesCount || 0),
+        };
     }
 
     static applyFinancialImpact(batch: any, date: Date, impact: AggregationImpact) {

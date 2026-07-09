@@ -3,12 +3,15 @@ import { createPortal } from "react-dom";
 import { 
     Plus, Search, Eye, Printer, Trash2, ShoppingCart, User, Package, 
     Calendar, ArrowRight, Edit2, FileText, Check, X, Phone,
-    Sparkles, RefreshCw, Languages, CreditCard, Wallet, AlertCircle, Share2, Info
+    Sparkles, RefreshCw, Languages, CreditCard, Wallet, AlertCircle, Share2, Info,
+    Hash
 } from "lucide-react";
 import { dbService } from "../services/db";
+import { syncEngine } from "../services/syncEngine";
 import { Invoice, Product, Customer, Supplier, InvoiceItem, InvoiceStatus, Currency, PaymentType, CashBox } from "../types";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, useDragControls } from "motion/react";
 import { cn, hasPermission } from "../lib/utils";
+import PrintPreviewModal from "./PrintPreviewModal";
 
 const PAYMENT_TYPES: { value: PaymentType; label: string; en: string }[] = [
     { value: 'نقدآ', label: 'نقداً', en: 'Cash' },
@@ -18,7 +21,7 @@ const PAYMENT_TYPES: { value: PaymentType; label: string; en: string }[] = [
 ];
 
 interface InvoicesProps {
-    type: 'sale' | 'purchase';
+    type: 'sale' | 'purchase' | 'sale_return' | 'purchase_return';
     currentUser?: any;
 }
 
@@ -48,6 +51,9 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
     const [partners, setPartners] = useState<(Customer | Supplier)[]>([]);
     const [cashBoxes, setCashBoxes] = useState<CashBox[]>([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const posDragControls = useDragControls();
+    const printDragControls = useDragControls();
+    const paymentDragControls = useDragControls();
     const [searchTerm, setSearchTerm] = useState("");
 
     // Mobile POS Layout Toggle
@@ -69,17 +75,107 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
     const [selectedBoxId, setSelectedBoxId] = useState("");
     const [recordingBoxId, setRecordingBoxId] = useState("");
     const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
+    const lastLoadedInvoiceIdRef = useRef<string | null>(null);
     const [invoiceToDelete, setInvoiceToDelete] = useState<Invoice | null>(null);
+
+    // Optical Prescription State
+    const [showOpticalSection, setShowOpticalSection] = useState(false);
+    const [optRightSph, setOptRightSph] = useState("");
+    const [optRightCyl, setOptRightCyl] = useState("");
+    const [optRightAx, setOptRightAx] = useState("");
+    const [optRightNearSph, setOptRightNearSph] = useState("");
+    const [optRightNearCyl, setOptRightNearCyl] = useState("");
+    const [optRightNearAx, setOptRightNearAx] = useState("");
+    const [optLeftSph, setOptLeftSph] = useState("");
+    const [optLeftCyl, setOptLeftCyl] = useState("");
+    const [optLeftAx, setOptLeftAx] = useState("");
+    const [optLeftNearSph, setOptLeftNearSph] = useState("");
+    const [optLeftNearCyl, setOptLeftNearCyl] = useState("");
+    const [optLeftNearAx, setOptLeftNearAx] = useState("");
+    const [optIpd, setOptIpd] = useState("");
+    const [optLensTypeSelect, setOptLensTypeSelect] = useState("");
+    const [optLensType, setOptLensType] = useState("");
+    const [optFrameTypeSelect, setOptFrameTypeSelect] = useState("");
+    const [optFrameType, setOptFrameType] = useState("");
     
+    const [originalInvoiceSearchTerm, setOriginalInvoiceSearchTerm] = useState("");
+    const [originalInvoiceResults, setOriginalInvoiceResults] = useState<Invoice[]>([]);
+    const [isSearchingOriginal, setIsSearchingOriginal] = useState(false);
+
+    const searchOriginalInvoice = async (term: string) => {
+        setOriginalInvoiceSearchTerm(term);
+        if (term.length < 1) {
+            setOriginalInvoiceResults([]);
+            return;
+        }
+        setIsSearchingOriginal(true);
+        try {
+            const targetType = type === 'sale_return' ? 'sale' : 'purchase';
+            const res = await dbService.getPaginated("invoices", 100, null, [{ field: 'type', op: '==', value: targetType }]);
+            const matched = (res.data as Invoice[]).filter(inv => 
+                (inv.invoiceNumber && inv.invoiceNumber.toLowerCase().includes(term.toLowerCase())) ||
+                (inv.id && inv.id.toLowerCase().includes(term.toLowerCase())) ||
+                (inv.partnerName && inv.partnerName.toLowerCase().includes(term.toLowerCase()))
+            );
+            setOriginalInvoiceResults(matched);
+        } catch(e) {
+            console.error(e);
+        } finally {
+            setIsSearchingOriginal(false);
+        }
+    };
+
+    const selectOriginalInvoice = (inv: Invoice) => {
+        setInvoiceItems(inv.items.map(item => ({ ...item })));
+        setSelectedPartnerId(inv.partnerId);
+        setSearchPartnerTerm(inv.partnerName || "");
+        setPartnerPhone((inv as any).partnerPhone || "");
+        setIsNewPartner(false);
+        setDiscount(0);
+        setPaidAmount(0); // Default to 0 refund, user can adjust
+        setOriginalInvoiceSearchTerm(inv.invoiceNumber || inv.id || "");
+        setOriginalInvoiceResults([]);
+    };
+
     // UI Helpers
     const [showPartnerSuggestions, setShowPartnerSuggestions] = useState(false);
     const [productSearchTerm, setProductSearchTerm] = useState("");
     const [activeCategory, setActiveCategory] = useState<string>("الكل");
+    const [validationError, setValidationError] = useState<string | null>(null);
 
     // Print & Templates settings State
     const [viewingInvoice, setViewingInvoice] = useState<Invoice | null>(null);
     const [storeSettings, setStoreSettings] = useState<any>(null);
     const [printTemplate, setPrintTemplate] = useState<PrintTemplate>('A4');
+
+    // Print Preview State
+    const [printPreview, setPrintPreview] = useState<{
+        isOpen: boolean;
+        html: string;
+        title: string;
+        size: 'a4' | 'thermal';
+    }>({ isOpen: false, html: '', title: '', size: 'a4' });
+
+const frameTypeOptions = [
+    "Men's Metal Frame (رجالي معدن)",
+    "Men's Plastic Frame (رجالي بلاستيك)",
+    "Women's Metal Frame (نسائي معدن)",
+    "Women's Plastic Frame (نسائي بلاستيك)",
+    "Children Frame (أطفال)",
+    "Special Frame (خاص)",
+    "Other"
+];
+
+const lensTypeOptions = [
+    "Regular Lens",
+    "Blue Cut",
+    "Anti Reflective",
+    "Photochromic",
+    "Bifocal",
+    "Progressive",
+    "Sunglass Lens",
+    "Other"
+];
     const [printLanguage, setPrintLanguage] = useState<PrintLanguage>('BILINGUAL');
     const [showTerms, setShowTerms] = useState(true);
     const [showLogo, setShowLogo] = useState(true);
@@ -88,12 +184,19 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
     useEffect(() => {
         const loadSettings = async () => {
             const settings = await dbService.getStoreSettings();
+            if (!settings) return;
             setStoreSettings(settings);
             if (settings.defaultPrintSize) {
-                setPrintTemplate(settings.defaultPrintSize);
+                const map: Record<string, PrintTemplate> = {
+                    "A4": "A4",
+                    "A3": "A3",
+                    "Thermal 80mm": "Thermal80",
+                    "Thermal 58mm": "Thermal58"
+                };
+                setPrintTemplate(map[settings.defaultPrintSize] || 'A4');
             }
             if (settings.language) {
-                setPrintLanguage(settings.language.toUpperCase());
+                setPrintLanguage(settings.language.toUpperCase() as PrintLanguage);
             }
         };
         loadSettings();
@@ -119,12 +222,17 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
 
     useEffect(() => {
         loadData();
-    }, [type]);
+        const unsubscribe = syncEngine.subscribe('DATA_CHANGED', () => {
+            loadData();
+            if (isModalOpen) loadStaticData();
+        });
+        return unsubscribe;
+    }, [type, isModalOpen]);
 
     const loadStaticData = async () => {
         const [prodData, partData, boxData] = await Promise.all([
             dbService.getAll("products"),
-            dbService.getAll(type === 'sale' ? "customers" : "suppliers"),
+            dbService.getAll(type.includes('sale') ? 'customers' : 'suppliers'),
             dbService.getAll("cashBoxes")
         ]);
         setProducts(prodData as Product[]);
@@ -132,11 +240,17 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
         const boxes = boxData as CashBox[];
         setCashBoxes(boxes);
 
-        // Pre-select first active Cash Box
-        const activeBox = boxes.find(b => b.isActive) || boxes[0];
-        if (activeBox && !selectedBoxId) {
-            setSelectedBoxId(activeBox.id || "");
-            setRecordingBoxId(activeBox.id || "");
+        // Pre-select Cash Box based on User Policy
+        const assignedBox = currentUser?.assignedBoxId ? boxes.find(b => b.id === currentUser.assignedBoxId) : null;
+        if (assignedBox) {
+            setSelectedBoxId(assignedBox.id || "");
+            setRecordingBoxId(assignedBox.id || "");
+        } else {
+            const activeBox = boxes.find(b => b.isActive) || boxes[0];
+            if (activeBox && !selectedBoxId) {
+                setSelectedBoxId(activeBox.id || "");
+                setRecordingBoxId(activeBox.id || "");
+            }
         }
     };
 
@@ -150,7 +264,13 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
         
         try {
             const res = await dbService.getPaginated("invoices", 25, reset ? null : lastInvoiceDoc, [{ field: 'type', op: '==', value: type }]);
-            setInvoices(prev => reset ? res.data as Invoice[] : [...prev, ...res.data as Invoice[]]);
+            setInvoices(prev => {
+                const newData = res.data as Invoice[];
+                if (reset) return newData;
+                const existingIds = new Set(prev.map(i => i.id).filter(Boolean));
+                const filteredNew = newData.filter(i => !existingIds.has(i.id));
+                return [...prev, ...filteredNew];
+            });
             setLastInvoiceDoc(res.lastDoc);
             setHasMoreInvoices(res.hasMore);
         } catch (error) {
@@ -210,7 +330,7 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                     : i
             ));
         } else {
-            const price = type === 'sale' ? product.salePrice : product.purchasePrice;
+            const price = type.includes('sale') ? product.salePrice : product.purchasePrice;
             setInvoiceItems([...invoiceItems, {
                 productId: product.id!,
                 productName: product.name,
@@ -255,9 +375,21 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
         return invoiceItems.reduce((acc, cur) => acc + cur.total, 0);
     };
 
-    const remainingAmount = Math.max(0, calculateTotal() - discount - paidAmount);
+    const remainingAmount = calculateTotal() - discount - paidAmount;
+    
+    const recordingInvoice = recordingInvoiceId ? invoices.find(i => i.id === recordingInvoiceId) : null;
+    const currentInvoiceRemaining = recordingInvoice 
+        ? Math.max(0, (Number(recordingInvoice.total || 0) - Number(recordingInvoice.discount || 0)) - Number(recordingInvoice.paid || 0))
+        : 0;
 
     useEffect(() => {
+        // If we just loaded this invoice for editing, do not run auto-calculations
+        // that overwrite the loaded paid and discount values.
+        if (editingInvoiceId && lastLoadedInvoiceIdRef.current === editingInvoiceId) {
+            lastLoadedInvoiceIdRef.current = null;
+            return;
+        }
+
         const total = calculateTotal();
         if (paymentType === 'نقدآ') {
             setPaidAmount(Math.max(0, total - discount));
@@ -267,86 +399,150 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
             setPaidAmount(0);
             setDiscount(total);
         }
-    }, [paymentType, invoiceItems, discount]);
+    }, [paymentType, invoiceItems, discount, editingInvoiceId]);
 
     const handleRecordPayment = async () => {
         if (!recordingInvoiceId || paymentAmount <= 0) return;
         if (!recordingBoxId) {
-            alert("يرجى اختيار الصندوق المالي لإيداع/صرف المبلغ");
+            setValidationError("يرجى اختيار الصندوق المالي لإيداع/صرف المبلغ");
             return;
         }
+
+        const invoice = invoices.find(inv => inv.id === recordingInvoiceId);
+        if (!invoice) return;
+
+        // Check if paymentAmount is larger than remaining amount of the invoice
+        const invoiceRemaining = Math.max(0, (Number(invoice.total || 0) - Number(invoice.discount || 0)) - Number(invoice.paid || 0));
+        if (paymentAmount > invoiceRemaining) {
+            setValidationError(`خطأ: مبلغ السداد (${paymentAmount.toLocaleString()}) أكبر من المبلغ المتبقي للفاتورة (${invoiceRemaining.toLocaleString()})`);
+            return;
+        }
+
+        if (invoice.type === 'purchase') {
+            const box = cashBoxes.find(b => b.id === recordingBoxId);
+            if (box && ((box.balance || 0) - paymentAmount) < 0) {
+                setValidationError("رصيد الصندوق غير كاف لإتمام هذه العملية (لا يمكن أن يكون بالسالب)");
+                return;
+            }
+        }
+
         setIsSaving(true);
         try {
-            const invoice = invoices.find(inv => inv.id === recordingInvoiceId);
-            if (!invoice) return;
-
-            const newPaid = (invoice.paid || 0) + paymentAmount;
-            const remaining = (invoice.total - (invoice.discount || 0)) - newPaid;
+            const newPaid = Number(invoice.paid || 0) + Number(paymentAmount);
+            const remaining = (Number(invoice.total || 0) - Number(invoice.discount || 0)) - newPaid;
             const newStatus: InvoiceStatus = remaining <= 0 ? 'مدفوع' : 'جزئي';
 
-            await dbService.update("invoices", recordingInvoiceId, {
-                paid: newPaid,
-                status: newStatus
-            });
+            await dbService.recordInvoicePayment(
+                invoice,
+                Number(paymentAmount),
+                recordingBoxId,
+                newPaid,
+                newStatus
+            );
 
-            await dbService.addTransaction({
-                type: invoice.type === 'sale' ? 'قبض' : 'صرف',
-                amount: paymentAmount,
-                currency: invoice.currency || 'YER',
-                description: `دفعة من الحساب للفاتورة: #${invoice.id?.slice(0, 8).toUpperCase()}`,
-                partnerId: invoice.partnerId,
-                partnerName: invoice.partnerName,
-                boxId: recordingBoxId, 
-                relatedId: invoice.id,
-                createdAt: new Date().toISOString()
-            });
+            // Update local state immediately so changes are reflected instantly in the UI/window
+            const updatedInvoice = {
+                ...invoice,
+                paid: newPaid,
+                status: newStatus,
+                updatedAt: new Date().toISOString()
+            };
+            setInvoices(prev => prev.map(inv => inv.id === invoice.id ? updatedInvoice : inv));
+            if (viewingInvoice && viewingInvoice.id === invoice.id) {
+                setViewingInvoice(updatedInvoice);
+            }
 
             setIsRecordingPayment(false);
             setRecordingInvoiceId(null);
             setPaymentAmount(0);
             loadData();
-        } catch (error) {
-            alert("فشل تسجيل الدفعة");
+        } catch (error: any) {
+            console.error("Error recording payment:", error);
+            const errorMsg = error?.message || String(error);
+            if (errorMsg.includes("Connection failed")) {
+                setValidationError("فشل الاتصال بقاعدة البيانات. يرجى التأكد من إكمال إعداد Firebase في لوحة التحكم والتأكد من اتصال الإنترنت.");
+            } else {
+                setValidationError("حدث خطأ أثناء تسجيل الدفعة: " + errorMsg);
+            }
         } finally {
             setIsSaving(false);
         }
     };
 
     const handleSubmit = async (printAfter: boolean = false) => {
+        if (editingInvoiceId && !hasPermission(currentUser, 'edit_invoices')) {
+            setValidationError("عذراً، لا تملك صلاحية تعديل البيانات.");
+            return;
+        }
+        const oldInvoice = editingInvoiceId ? invoices.find(inv => inv.id === editingInvoiceId) : null;
+
         if (invoiceItems.length === 0) {
-            alert("يرجى إضافة منتج واحد على الأقل للفاتورة");
+            setValidationError("يرجى إضافة منتج واحد على الأقل للفاتورة");
             return;
         }
 
         if (isNewPartner && !newPartnerName) {
-            alert("يرجى إدخال اسم العميل/المورد الجديد");
+            setValidationError("يرجى إدخال اسم العميل/المورد الجديد");
             return;
         }
 
         if (!isNewPartner && !selectedPartnerId) {
-            alert("يرجى اختيار العميل أو المورد أو كتابة اسم جديد");
+            setValidationError("يرجى اختيار العميل أو المورد أو كتابة اسم جديد");
             return;
         }
 
         if (discount < 0 || paidAmount < 0) {
-            alert("لا يمكن أن يكون الخصم أو المبلغ المدفوع أقل من الصفر");
+            setValidationError("لا يمكن أن يكون الخصم أو المبلغ المدفوع أقل من الصفر");
             return;
         }
 
         if (paidAmount > 0 && !selectedBoxId) {
-            alert("يرجى تحديد الصندوق لمبلغ الدفعة الحالية");
+            setValidationError("يرجى تحديد الصندوق لمبلغ الدفعة الحالية");
+            return;
+        }
+
+        if (paidAmount > 0 && (type === 'purchase' || type === 'sale_return') && selectedBoxId) {
+            const box = cashBoxes.find(b => b.id === selectedBoxId);
+            if (box) {
+                let futureBalance = (box.balance || 0) - paidAmount;
+                if (editingInvoiceId && oldInvoice && oldInvoice.boxId === selectedBoxId) {
+                    futureBalance += oldInvoice.paid || 0;
+                }
+                if (futureBalance < 0) {
+                    setValidationError("رصيد الصندوق غير كاف لإتمام هذه العملية (لا يمكن أن يكون بالسالب)");
+                    return;
+                }
+            }
+        }
+
+        // 1. Basic Validation - stop immediately if paid amount exceeds total
+        const total = calculateTotal();
+        const totalValue = total - discount;
+
+        if (paidAmount > totalValue) {
+            setValidationError(`خطأ: المبلغ المدفوع (${paidAmount.toLocaleString()}) أكبر من صافي قيمة الفاتورة (${totalValue.toLocaleString()})`);
             return;
         }
 
         setIsSaving(true);
-        const total = calculateTotal();
+
         const partner = partners.find(p => p.id === selectedPartnerId);
+
+        let finalPaymentType = paymentType;
+        if (paidAmount > 0 && paidAmount < totalValue) {
+            finalPaymentType = 'نقد_آجل';
+        } else if (paidAmount === 0 && totalValue > 0 && finalPaymentType !== 'مجاني') {
+            finalPaymentType = 'آجل';
+        } else if (paidAmount >= totalValue && totalValue > 0) {
+            finalPaymentType = 'نقدآ';
+        }
 
         const status: InvoiceStatus = paidAmount === 0 
             ? 'آجل' 
             : (paidAmount >= (total - discount) ? 'مدفوع' : 'جزئي');
 
         const invoiceData: any = {
+            isReturn: type.includes('return'),
             type,
             partnerId: isNewPartner ? "" : selectedPartnerId,
             partnerName: isNewPartner ? newPartnerName : (partner?.name || searchPartnerTerm || "عام"),
@@ -356,7 +552,7 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
             paid: paidAmount,
             discount,
             status,
-            paymentType,
+            paymentType: finalPaymentType,
             referenceNumber,
             notes,
             currency,
@@ -365,14 +561,29 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
             lifecycleStatus: 'معتمد'
         };
 
+        if (type.includes('sale') && showOpticalSection) {
+            invoiceData.opticalPrescription = {
+                rightEye: {
+                    distance: { sph: optRightSph, cyl: optRightCyl, ax: optRightAx },
+                    near: { sph: optRightNearSph, cyl: optRightNearCyl, ax: optRightNearAx }
+                },
+                leftEye: {
+                    distance: { sph: optLeftSph, cyl: optLeftCyl, ax: optLeftAx },
+                    near: { sph: optLeftNearSph, cyl: optLeftNearCyl, ax: optLeftNearAx }
+                },
+                ipd: optIpd,
+                lensType: optLensType,
+                frameType: optFrameType
+            };
+        }
+
         try {
             let savedId = editingInvoiceId;
             if (editingInvoiceId) {
-                const oldInvoice = invoices.find(inv => inv.id === editingInvoiceId);
                 if (oldInvoice) {
                     await dbService.updateInvoiceData(oldInvoice, invoiceData);
                 } else {
-                    await dbService.update("invoices", editingInvoiceId, invoiceData);
+                    throw new Error("لا يمكن تعديل الفاتورة لعدم العثور على البيانات القديمة");
                 }
             } else {
                 savedId = await dbService.createInvoice(invoiceData);
@@ -390,15 +601,25 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                 };
                 setViewingInvoice(finalInvoice);
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error("Error saving invoice:", error);
-            alert("حدث خطأ أثناء حفظ الفاتورة: " + error);
+            const errorMsg = error?.message || String(error);
+            if (errorMsg.includes("Connection failed")) {
+                setValidationError("فشل الاتصال بقاعدة البيانات. يرجى التأكد من إكمال إعداد Firebase في لوحة التحكم والتأكد من اتصال الإنترنت.");
+            } else {
+                setValidationError("حدث خطأ أثناء حفظ الفاتورة: " + errorMsg);
+            }
         } finally {
             setIsSaving(false);
         }
     };
 
     const handleEditInvoice = (inv: Invoice) => {
+        if (!hasPermission(currentUser, 'edit_invoices')) {
+            alert("عذراً، لا تملك صلاحية تعديل البيانات.");
+            return;
+        }
+        lastLoadedInvoiceIdRef.current = inv.id!;
         setEditingInvoiceId(inv.id!);
         setSelectedPartnerId(inv.partnerId);
         setSearchPartnerTerm(inv.partnerName);
@@ -412,18 +633,73 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
         setReferenceNumber(inv.referenceNumber || "");
         setNotes(inv.notes || "");
         if (inv.boxId) setSelectedBoxId(inv.boxId);
+        
+        if (inv.opticalPrescription) {
+            setShowOpticalSection(true);
+            setOptRightSph(inv.opticalPrescription.rightEye?.distance?.sph || "");
+            setOptRightCyl(inv.opticalPrescription.rightEye?.distance?.cyl || "");
+            setOptRightAx(inv.opticalPrescription.rightEye?.distance?.ax || "");
+            setOptRightNearSph(inv.opticalPrescription.rightEye?.near?.sph || "");
+            setOptRightNearCyl(inv.opticalPrescription.rightEye?.near?.cyl || "");
+            setOptRightNearAx(inv.opticalPrescription.rightEye?.near?.ax || "");
+            setOptLeftSph(inv.opticalPrescription.leftEye?.distance?.sph || "");
+            setOptLeftCyl(inv.opticalPrescription.leftEye?.distance?.cyl || "");
+            setOptLeftAx(inv.opticalPrescription.leftEye?.distance?.ax || "");
+            setOptLeftNearSph(inv.opticalPrescription.leftEye?.near?.sph || "");
+            setOptLeftNearCyl(inv.opticalPrescription.leftEye?.near?.cyl || "");
+            setOptLeftNearAx(inv.opticalPrescription.leftEye?.near?.ax || "");
+            setOptIpd(inv.opticalPrescription.ipd || "");
+            const initLens = inv.opticalPrescription.lensType || "";
+            setOptLensType(initLens);
+            setOptLensTypeSelect(lensTypeOptions.includes(initLens) ? initLens : (initLens ? "Other" : ""));
+            
+            const initFrame = inv.opticalPrescription.frameType || "";
+            setOptFrameType(initFrame);
+            setOptFrameTypeSelect(frameTypeOptions.includes(initFrame) ? initFrame : (initFrame ? "Other" : ""));
+        } else {
+            setShowOpticalSection(false);
+            setOptRightSph(""); setOptRightCyl(""); setOptRightAx("");
+            setOptRightNearSph(""); setOptRightNearCyl(""); setOptRightNearAx("");
+            setOptLeftSph(""); setOptLeftCyl(""); setOptLeftAx("");
+            setOptLeftNearSph(""); setOptLeftNearCyl(""); setOptLeftNearAx("");
+            setOptIpd(""); setOptLensType(""); setOptFrameType(""); setOptLensTypeSelect(""); setOptFrameTypeSelect("");
+        }
+
         setIsModalOpen(true);
     };
 
     const confirmDeleteInvoice = async () => {
         if (!invoiceToDelete?.id) return;
+        if (!hasPermission(currentUser, 'delete_invoices')) {
+            alert("عذراً، لا تملك صلاحية حذف البيانات.");
+            setInvoiceToDelete(null);
+            return;
+        }
         setIsSaving(true);
+        
+        // Check for negative cashbox balance
+        if (invoiceToDelete.type === 'sale' && invoiceToDelete.boxId && (invoiceToDelete.paid || 0) > 0) {
+            const box = cashBoxes.find(b => b.id === invoiceToDelete.boxId);
+            if (box && ((box.balance || 0) - invoiceToDelete.paid!) < 0) {
+                setValidationError("لا يمكن حذف الفاتورة لأنها ستؤدي إلى رصيد سالب في الصندوق المستلم.");
+                setIsSaving(false);
+                setInvoiceToDelete(null);
+                return;
+            }
+        }
+        
         try {
             await dbService.deleteInvoiceData(invoiceToDelete);
             setInvoiceToDelete(null);
             loadData();
-        } catch (error) {
-            alert("فشل حذف الفاتورة");
+        } catch (error: any) {
+            console.error("Error deleting invoice:", error);
+            const errorMsg = error?.message || String(error);
+            if (errorMsg.includes("Connection failed")) {
+                setValidationError("فشل الاتصال بقاعدة البيانات. يرجى التأكد من إكمال إعداد Firebase في لوحة التحكم والتأكد من اتصال الإنترنت.");
+            } else {
+                setValidationError("فشل حذف الفاتورة: " + errorMsg);
+            }
         } finally {
             setIsSaving(false);
         }
@@ -443,6 +719,12 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
         setCurrency("YER");
         setReferenceNumber("");
         setNotes("");
+        setShowOpticalSection(false);
+        setOptRightSph(""); setOptRightCyl(""); setOptRightAx("");
+        setOptRightNearSph(""); setOptRightNearCyl(""); setOptRightNearAx("");
+        setOptLeftSph(""); setOptLeftCyl(""); setOptLeftAx("");
+        setOptLeftNearSph(""); setOptLeftNearCyl(""); setOptLeftNearAx("");
+        setOptIpd(""); setOptLensType(""); setOptFrameType(""); setOptLensTypeSelect(""); setOptFrameTypeSelect("");
         // Reset to first cash box
         const defaultBox = cashBoxes.find(b => b.isActive) || cashBoxes[0];
         if (defaultBox) {
@@ -451,13 +733,49 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
     };
 
     const [statusFilter, setStatusFilter] = useState<'الكل' | InvoiceStatus>('الكل');
+    const [dateFilterType, setDateFilterType] = useState<'today' | 'specific_date' | 'date_range' | 'all'>('today');
+    const [filterSpecificDate, setFilterSpecificDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+    const [filterStartDate, setFilterStartDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+    const [filterEndDate, setFilterEndDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
-    const filteredInvoices = invoices.filter(inv => {
+    const filteredInvoices = [...invoices].filter(inv => {
         const matchesSearch = (inv.partnerName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+            (inv.invoiceNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+            (inv.referenceNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
             (inv.id || '').toLowerCase().includes(searchTerm.toLowerCase());
         
         const matchesStatus = statusFilter === 'الكل' || inv.status === statusFilter;
-        return matchesSearch && matchesStatus;
+
+        let matchesDate = true;
+        const dateVal = inv.createdAt || (inv as any).updatedAt;
+        if (dateVal) {
+            try {
+                // Ensure we parse the date properly to local date string (YYYY-MM-DD)
+                const invDate = new Date(dateVal);
+                // Adjusting for local timezone offset safely to get correct YYYY-MM-DD locally
+                const offset = invDate.getTimezoneOffset() * 60000;
+                const localISOTime = (new Date(invDate.getTime() - offset)).toISOString().split('T')[0];
+                
+                if (dateFilterType === 'today') {
+                    const today = new Date();
+                    const todayOffset = today.getTimezoneOffset() * 60000;
+                    const todayLocal = (new Date(today.getTime() - todayOffset)).toISOString().split('T')[0];
+                    matchesDate = localISOTime === todayLocal;
+                } else if (dateFilterType === 'specific_date') {
+                    matchesDate = localISOTime === filterSpecificDate;
+                } else if (dateFilterType === 'date_range') {
+                    matchesDate = localISOTime >= filterStartDate && localISOTime <= filterEndDate;
+                }
+            } catch (e) {
+                console.error("Error parsing date", e);
+            }
+        }
+
+        return matchesSearch && matchesStatus && matchesDate;
+    }).sort((a, b) => {
+        const numA = Number(a.invoiceNumber) || 0;
+        const numB = Number(b.invoiceNumber) || 0;
+        return numA - numB;
     });
 
     const stats = {
@@ -469,7 +787,7 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
     // Bilingual labels database
     const t = {
         AR: {
-            title: type === 'sale' ? "فاتورة مبيعات" : "فاتورة مشتريات",
+            title: type === 'sale' ? 'فاتورة مبيعات' : type === 'purchase' ? 'فاتورة مشتريات' : type === 'sale_return' ? 'فاتورة مرتجع مبيعات' : 'فاتورة مرتجع مشتريات',
             invoice_no: "رقم الفاتورة",
             date: "تاريخ الإصدار",
             customer: "العميل",
@@ -498,7 +816,7 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
             footer_message: "نشكر زيارتكم الكريمة وثقتكم الغالية بنا!"
         },
         EN: {
-            title: type === 'sale' ? "SALES INVOICE" : "PURCHASE INVOICE",
+            title: type === 'sale' ? 'SALES INVOICE' : type === 'purchase' ? 'PURCHASE INVOICE' : type === 'sale_return' ? 'SALES RETURN INVOICE' : 'PURCHASE RETURN INVOICE',
             invoice_no: "Invoice No",
             date: "Issue Date",
             customer: "Customer",
@@ -575,15 +893,14 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
         if (!viewingInvoice) return;
         const originalTitle = document.title;
         const formattedDate = new Date().toISOString().split('T')[0];
-        document.title = `${type === 'sale' ? 'فاتورة_بيع' : 'فاتورة_شراء'}_${viewingInvoice.partnerName || 'عام'}_${viewingInvoice.id?.slice(0, 8).toUpperCase()}_${formattedDate}`;
+        document.title = `${type === 'sale' ? 'فاتورة_بيع' : type === 'purchase' ? 'فاتورة_شراء' : type === 'sale_return' ? 'مرتجع_مبيعات' : 'مرتجع_مشتريات'}_${viewingInvoice.partnerName || 'عام'}_${viewingInvoice.invoiceNumber || viewingInvoice.id?.slice(0, 8).toUpperCase()}_${formattedDate}`;
         triggerBrowserPrint();
         document.title = originalTitle;
     };
 
     // Trigger browser print using custom layout injects
     const triggerBrowserPrint = () => {
-        const printWindow = window.open('', '_blank');
-        if (!printWindow || !printRef.current) return;
+        if (!viewingInvoice || !printRef.current) return;
         
         let customStyles = '';
         if (printTemplate === 'Thermal80') {
@@ -591,6 +908,7 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                 @page { size: 80mm auto; margin: 0; }
                 body { width: 80mm; padding: 4mm; margin: 0; direction: ${printLanguage === 'EN' ? 'ltr' : 'rtl'}; font-family: monospace, system-ui, sans-serif; background: #fff; color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
                 .print-card { width: 100%; border: none; padding: 0; margin: 0; }
+                #invoice_wrapper { width: 100% !important; max-width: 100% !important; padding: 0 !important; margin: 0 !important; border: none !important; box-shadow: none !important; }
                 table { width: 100%; border-collapse: collapse; margin: 5px 0; }
                 th, td { padding: 4px 1px; border-bottom: 1px dashed #000; font-size: 11px; text-align: start; }
                 .divider { border-top: 1px dashed #000; margin: 6px 0; }
@@ -601,6 +919,7 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                 @page { size: 58mm auto; margin: 0; }
                 body { width: 58mm; padding: 2mm; margin: 0; direction: ${printLanguage === 'EN' ? 'ltr' : 'rtl'}; font-family: monospace, system-ui, sans-serif; background: #fff; color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
                 .print-card { width: 100%; border: none; padding: 0; margin: 0; }
+                #invoice_wrapper { width: 100% !important; max-width: 100% !important; padding: 0 !important; margin: 0 !important; border: none !important; box-shadow: none !important; }
                 table { width: 100%; border-collapse: collapse; margin: 4px 0; }
                 th, td { padding: 3px 1px; border-bottom: 1px dashed #000; font-size: 9px; text-align: start; }
                 .divider { border-top: 1px dashed #000; margin: 4px 0; }
@@ -626,32 +945,32 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
             `;
         }
 
-        printWindow.document.write(`
-            <html>
-                <head>
-                    <title>${t[printLanguage === 'EN' ? 'EN' : 'AR'].title} #${viewingInvoice?.id?.slice(0, 8)}</title>
-                    <script src="https://cdn.tailwindcss.com"></script>
-                    <style>
-                        ${customStyles}
-                        @media print {
-                            body { background-color: #fff !important; }
-                            .no-print { display: none !important; }
-                        }
-                    </style>
-                </head>
-                <body onload="setTimeout(function(){ window.print(); window.close(); }, 300);">
-                    <div class="print-wrapper">
-                        ${printRef.current.innerHTML}
-                    </div>
-                </body>
-            </html>
-        `);
-        printWindow.document.close();
+        const html = `
+            <style>
+                ${customStyles}
+            </style>
+            <div class="print-wrapper">
+                ${printRef.current.innerHTML}
+            </div>
+        `;
+
+        setPrintPreview({
+            isOpen: true,
+            html,
+            title: `${type === 'sale' ? 'فاتورة بيع' : type === 'purchase' ? 'فاتورة شراء' : type === 'sale_return' ? 'مرتجع مبيعات' : 'مرتجع مشتريات'} #${viewingInvoice?.invoiceNumber || viewingInvoice?.id?.slice(0, 8)}`,
+            size: (printTemplate === 'Thermal80' || printTemplate === 'Thermal58') ? 'thermal' : 'a4'
+        });
     };
 
     return (
         <div className="space-y-2.5 animate-fade-up">
-            
+            <PrintPreviewModal 
+                isOpen={printPreview.isOpen}
+                onClose={() => setPrintPreview(prev => ({ ...prev, isOpen: false }))}
+                htmlContent={printPreview.html}
+                title={printPreview.title}
+                paperSize={printPreview.size}
+            />
             {/* Metric Overview Cards */}
             <div className="grid grid-cols-3 gap-1.5 md:gap-2">
                 <div className="bg-white dark:bg-[#131b2e] p-2 md:p-2.5 rounded-xl border border-slate-100 dark:border-slate-800 shadow-sm relative overflow-hidden transition-all hover:border-slate-200">
@@ -711,34 +1030,90 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                               "w-full sm:w-auto flex items-center justify-center gap-1 text-white px-3 py-1.5 rounded-lg transition-all shadow-md active:scale-95 text-[11px] font-black cursor-pointer shrink-0",
                               type === 'sale' 
                                 ? "bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/15" 
-                                : "bg-blue-600 hover:bg-blue-700 shadow-blue-500/15"
+                                : type === 'purchase'
+                                ? "bg-blue-600 hover:bg-blue-700 shadow-blue-500/15"
+                                : type === 'sale_return'
+                                ? "bg-rose-600 hover:bg-rose-700 shadow-rose-500/15"
+                                : "bg-red-600 hover:bg-red-700 shadow-red-500/15"
                             )}
                         >
                             <Plus size={13} className="stroke-[3]" />
-                            {type === 'sale' ? "إنشاء كاشير مبيعات سريعة" : "إنشاء كاشير مشتريات سريعة"}
+                            {type === 'sale' 
+                              ? "إنشاء كاشير مبيعات سريعة" 
+                              : type === 'purchase' 
+                              ? "إنشاء كاشير مشتريات سريعة" 
+                              : type === 'sale_return' 
+                              ? "إنشاء مرتجع مبيعات" 
+                              : "إنشاء مرتجع مشتريات"}
                         </button>
                     )}
                 </div>
 
-                {/* Horizontal Quick filter categories */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 scroll-smooth custom-scrollbar w-full max-w-full">
-                    {(['الكل', 'مدفوع', 'جزئي', 'آجل'] as const).map((tab) => {
-                        const isActive = statusFilter === tab;
-                        return (
-                            <button
-                                key={tab}
-                                onClick={() => setStatusFilter(tab)}
-                                className={cn(
-                                    "px-2.5 py-1.5 rounded-xl text-[10px] font-black transition-all border shrink-0 cursor-pointer shadow-sm",
-                                    isActive
-                                        ? "bg-blue-600 text-white border-blue-600 shadow-blue-500/10"
-                                        : "bg-white dark:bg-[#131b2e] text-slate-600 dark:text-slate-450 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800"
-                                )}
+                {/* Horizontal Quick filter categories and Date Filters */}
+                <div className="flex flex-col xl:flex-row gap-2 xl:items-center justify-between">
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 xl:pb-0 scroll-smooth custom-scrollbar w-full max-w-full">
+                        {(['الكل', 'مدفوع', 'جزئي', 'آجل'] as const).map((tab) => {
+                            const isActive = statusFilter === tab;
+                            return (
+                                <button
+                                    key={tab}
+                                    onClick={() => setStatusFilter(tab)}
+                                    className={cn(
+                                        "px-2.5 py-1.5 rounded-xl text-[10px] font-black transition-all border shrink-0 cursor-pointer shadow-sm",
+                                        isActive
+                                            ? "bg-blue-600 text-white border-blue-600 shadow-blue-500/10"
+                                            : "bg-white dark:bg-[#131b2e] text-slate-600 dark:text-slate-450 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800"
+                                    )}
+                                >
+                                    {tab === 'الكل' ? 'جميع معاملات السداد' : tab}
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 xl:pb-0 scroll-smooth custom-scrollbar w-full xl:w-auto shrink-0">
+                        <div className="flex items-center gap-1.5 bg-white dark:bg-[#131b2e] border border-slate-200 dark:border-slate-800 rounded-xl p-1 shadow-sm shrink-0">
+                            <select
+                                value={dateFilterType}
+                                onChange={(e) => setDateFilterType(e.target.value as any)}
+                                className="bg-transparent text-slate-700 dark:text-slate-300 text-[10px] font-bold px-2 py-1 outline-none cursor-pointer border-none"
                             >
-                                {tab === 'الكل' ? 'جميع معاملات السداد' : tab}
-                            </button>
-                        );
-                    })}
+                                <option value="today">اليوم</option>
+                                <option value="specific_date">تاريخ محدد</option>
+                                <option value="date_range">خلال فترة</option>
+                                <option value="all">كل الأوقات</option>
+                            </select>
+
+                            {dateFilterType === 'specific_date' && (
+                                <div className="flex items-center border-r border-slate-200 dark:border-slate-700 pr-1.5 pl-1">
+                                    <input
+                                        type="date"
+                                        value={filterSpecificDate}
+                                        onChange={(e) => setFilterSpecificDate(e.target.value)}
+                                        className="bg-transparent text-slate-700 dark:text-slate-300 text-[10px] font-bold outline-none border-none cursor-pointer"
+                                    />
+                                </div>
+                            )}
+
+                            {dateFilterType === 'date_range' && (
+                                <div className="flex items-center gap-1 border-r border-slate-200 dark:border-slate-700 pr-1.5 pl-1">
+                                    <input
+                                        type="date"
+                                        value={filterStartDate}
+                                        onChange={(e) => setFilterStartDate(e.target.value)}
+                                        className="bg-transparent text-slate-700 dark:text-slate-300 text-[10px] font-bold outline-none border-none cursor-pointer max-w-[100px]"
+                                    />
+                                    <span className="text-slate-400 text-[10px]">-</span>
+                                    <input
+                                        type="date"
+                                        value={filterEndDate}
+                                        onChange={(e) => setFilterEndDate(e.target.value)}
+                                        className="bg-transparent text-slate-700 dark:text-slate-300 text-[10px] font-bold outline-none border-none cursor-pointer max-w-[100px]"
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -755,7 +1130,16 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                             <div>
                                 <div className="flex justify-between items-start">
                                     <div className="space-y-0.5">
-                                        <div className="text-[9px] text-slate-400 dark:text-slate-500 font-extrabold tracking-wider font-mono">#{inv.id?.slice(0, 8).toUpperCase()}</div>
+                                        <div className="text-[9px] text-slate-400 dark:text-slate-500 font-extrabold tracking-wider font-mono flex flex-wrap items-center gap-1.5">
+                                            {inv.invoiceNumber ? (
+                                                <span className="bg-blue-50 dark:bg-blue-500/10 text-blue-600 px-1.5 py-0.5 rounded border border-blue-100/60 font-extrabold">فاتورة #{inv.invoiceNumber}</span>
+                                            ) : (
+                                                <span>#{inv.invoiceNumber || inv.id?.slice(0, 8).toUpperCase()}</span>
+                                            )}
+                                            {inv.referenceNumber && (
+                                                <span className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-1.5 py-0.5 rounded border border-slate-200/50 font-bold">مرجع: {inv.referenceNumber}</span>
+                                            )}
+                                        </div>
                                         <div className="font-extrabold text-slate-800 dark:text-slate-100 text-xs leading-tight flex items-center gap-1">
                                             <User size={12} className="text-slate-450 shrink-0" />
                                             <span className="truncate max-w-[120px]">{inv.partnerName}</span>
@@ -812,7 +1196,7 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                     >
                                         <Eye size={12} className="text-blue-500" /> عرض
                                     </button>
-                                    {hasPermission(currentUser, 'add_invoices') && (
+                                    {hasPermission(currentUser, 'edit_invoices') && (
                                         <button 
                                             onClick={() => handleEditInvoice(inv)}
                                             className="flex flex-col items-center justify-center py-1.5 px-1 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/70 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg transition-all cursor-pointer text-[9px] font-extrabold gap-0.5"
@@ -820,19 +1204,26 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                             <Edit2 size={11} className="text-indigo-500" /> تعديل
                                         </button>
                                     )}
-                                    {inv.status !== 'مدفوع' && hasPermission(currentUser, 'add_invoices') && (
+                                    {hasPermission(currentUser, 'add_invoices') && (
                                         <button 
                                             onClick={() => {
+                                                if (inv.status === 'مدفوع' || remaining <= 0) return;
                                                 setRecordingInvoiceId(inv.id!);
-                                                setPaymentAmount((inv.total - (inv.discount || 0)) - (inv.paid || 0));
+                                                setPaymentAmount(remaining);
                                                 setIsRecordingPayment(true);
                                             }}
-                                            className="flex flex-col items-center justify-center py-1.5 px-1 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/70 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg transition-all cursor-pointer text-[9px] font-extrabold gap-0.5"
+                                            disabled={inv.status === 'مدفوع' || remaining <= 0}
+                                            className={cn(
+                                                "flex flex-col items-center justify-center py-1.5 px-1 rounded-lg transition-all text-[9px] font-extrabold gap-0.5",
+                                                (inv.status === 'مدفوع' || remaining <= 0)
+                                                    ? "bg-slate-50 dark:bg-slate-800/40 text-slate-400 dark:text-slate-600 opacity-60 cursor-not-allowed"
+                                                    : "bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/70 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 cursor-pointer"
+                                            )}
                                         >
-                                            <CreditCard size={12} className="text-emerald-500" /> سداد
+                                            <CreditCard size={12} className={(inv.status === 'مدفوع' || remaining <= 0) ? "text-slate-400 dark:text-slate-600" : "text-emerald-500"} /> سداد
                                         </button>
                                     )}
-                                    {hasPermission(currentUser, 'add_invoices') && (
+                                    {hasPermission(currentUser, 'delete_invoices') && (
                                         <button 
                                             onClick={() => setInvoiceToDelete(inv)}
                                             className="flex flex-col items-center justify-center py-1.5 px-1 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800/70 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-lg transition-all cursor-pointer text-[9px] font-extrabold gap-0.5"
@@ -875,26 +1266,77 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                 initial={{ opacity: 0, y: "100%" }}
                                 animate={{ opacity: 1, y: 0 }}
                                 exit={{ opacity: 0, y: "100%" }}
-                                className="bg-slate-50 dark:bg-[#0c1222] w-full max-w-6xl h-full md:h-[90dvh] rounded-none md:rounded-[2rem] shadow-2xl relative overflow-hidden flex flex-col"
+                                drag
+                                dragListener={false}
+                                dragControls={posDragControls}
+                                dragMomentum={false}
+                                className="bg-slate-50 dark:bg-[#0c1222] w-full max-w-6xl h-[100dvh] md:h-[90dvh] rounded-none md:rounded-[2rem] shadow-2xl relative overflow-hidden flex flex-col"
                             >
                                 
                                 {/* POS Header */}
-                                <div className="px-4 py-2 bg-white dark:bg-[#131b2e] border-b border-slate-100 dark:border-slate-850 flex items-center justify-between shrink-0">
+                                <div 
+                                    className="px-4 py-2 bg-white dark:bg-[#131b2e] border-b border-slate-100 dark:border-slate-850 flex items-center justify-between shrink-0 cursor-move"
+                                    onPointerDown={(e) => posDragControls.start(e)}
+                                >
                                     <div className="flex items-center gap-3">
                                         <div className="p-2 bg-blue-50 dark:bg-blue-550/10 rounded-xl text-blue-600 dark:text-blue-400">
                                             <ShoppingCart size={16} className="stroke-[2.5]" />
                                         </div>
                                         <div>
                                             <h3 className="text-xs font-black text-slate-900 dark:text-white">
-                                                {editingInvoiceId ? "تعديل الفاتورة المحددة" : `نظام المبيعات السريعة / ${type === 'sale' ? 'بيع' : 'شراء'}`}
+                                                {editingInvoiceId ? "تعديل الفاتورة المحددة" : `نظام الفواتير / ${type === 'sale' ? 'بيع' : type === 'purchase' ? 'شراء' : type === 'sale_return' ? 'مرتجع مبيعات' : 'مرتجع مشتريات'}`}
                                             </h3>
-                                            <p className="text-[9px] text-slate-450 dark:text-slate-500 font-bold">بوابة مخصصة لإنهاء الفاتورة في ثوانٍ معدودة</p>
+                                            <p className="text-[9px] text-slate-450 dark:text-slate-500 font-bold">
+                                                {type.includes('return') 
+                                                  ? "بوابة مخصصة لتسجيل مرتجعات البضائع وتحديث الحسابات والمخازن فوراً" 
+                                                  : "بوابة مخصصة لإنهاء الفاتورة في ثوانٍ معدودة"}
+                                            </p>
                                         </div>
                                     </div>
                                     <button onClick={() => setIsModalOpen(false)} className="text-slate-450 hover:text-slate-650 dark:hover:text-white p-2 cursor-pointer border-none bg-transparent">
                                         <X size={18} />
                                     </button>
                                 </div>
+
+                                
+                                {/* Original Invoice Picker (Returns Only) */}
+                                {type.includes('return') && !editingInvoiceId && (
+                                    <div className="bg-rose-50 dark:bg-rose-950/20 px-4 py-2 border-b border-rose-100 dark:border-rose-900/30">
+                                        <label className="text-[10px] font-black text-rose-600 dark:text-rose-400 block mb-1">استيراد من فاتورة أصلية (اختياري)</label>
+                                        <div className="relative">
+                                            <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-rose-400" />
+                                            <input 
+                                                type="text"
+                                                placeholder="ابحث برقم الفاتورة أو اسم العميل/المورد..."
+                                                className="w-full pr-8 pl-3 py-1.5 bg-white dark:bg-[#131b2e] border border-rose-200 dark:border-rose-800 rounded-lg text-xs font-bold text-slate-800 dark:text-slate-200 focus:outline-none focus:border-rose-500"
+                                                value={originalInvoiceSearchTerm}
+                                                onChange={(e) => searchOriginalInvoice(e.target.value)}
+                                            />
+                                            {isSearchingOriginal && <RefreshCw size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-rose-400 animate-spin" />}
+                                        </div>
+                                        {originalInvoiceResults.length > 0 && (
+                                            <div className="absolute left-4 right-4 mt-1 bg-white dark:bg-[#162035] border border-slate-200 dark:border-slate-700 shadow-xl rounded-lg z-50 max-h-48 overflow-y-auto custom-scrollbar">
+                                                {originalInvoiceResults.map(inv => (
+                                                    <button
+                                                        key={inv.id}
+                                                        onClick={() => selectOriginalInvoice(inv)}
+                                                        className="w-full text-right px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800 border-b border-slate-100 dark:border-slate-800 last:border-0 flex items-center justify-between"
+                                                    >
+                                                        <div>
+                                                            <div className="text-xs font-black text-slate-800 dark:text-slate-200">
+                                                                {inv.partnerName}
+                                                            </div>
+                                                            <div className="text-[10px] text-slate-500 mt-0.5">
+                                                                رقم الفاتورة: {inv.invoiceNumber || inv.id?.slice(0,8)} | الإجمالي: {inv.total}
+                                                            </div>
+                                                        </div>
+                                                        <ArrowRight size={14} className="text-slate-400 rtl:rotate-180" />
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
 
                                 {/* COMPACT CUSTOMER PICKER for MOBILE (Always on top below header) */}
                                 <div className="lg:hidden bg-white dark:bg-[#131b2e] px-2.5 py-1.5 border-b border-slate-100 dark:border-slate-850 relative z-35 shrink-0">
@@ -954,6 +1396,30 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                         </div>
                                     </div>
 
+                                    {/* Mobile reference number and notes inputs */}
+                                    <div className="grid grid-cols-2 gap-1.5 mt-1.5 relative">
+                                        <div className="relative">
+                                            <Hash size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                                            <input 
+                                                type="text"
+                                                placeholder="رقم المرجع..."
+                                                className="w-full pr-7 pl-2 py-1 h-8 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-[10px] font-bold dark:text-white focus:outline-none focus:border-blue-550"
+                                                value={referenceNumber}
+                                                onChange={(e) => setReferenceNumber(e.target.value)}
+                                            />
+                                        </div>
+                                        <div className="relative">
+                                            <FileText size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                                            <input 
+                                                type="text"
+                                                placeholder="ملاحظات..."
+                                                className="w-full pr-7 pl-2 py-1 h-8 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-[10px] font-bold dark:text-white focus:outline-none focus:border-blue-550"
+                                                value={notes}
+                                                onChange={(e) => setNotes(e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+
                                     {isNewPartner && (
                                         <div className="mt-1 flex items-center gap-1 p-1 bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-450 rounded-lg text-[8px] font-bold leading-none">
                                             <Sparkles size={8} className="shrink-0" />
@@ -1002,7 +1468,7 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                     
                                     {/* checkout Billing panel - Tab 1 (Cart & Customer details) */}
                                     <div className={cn(
-                                        "lg:col-span-7 flex flex-col h-full lg:h-full lg:overflow-hidden p-3 md:p-4 space-y-3 bg-slate-50 dark:bg-slate-950 custom-scrollbar flex-1 lg:flex-none min-h-0 w-full overflow-hidden",
+                                        "lg:col-span-7 flex flex-col h-full p-3 md:p-4 space-y-3 bg-slate-50 dark:bg-slate-950 custom-scrollbar flex-1 min-h-0 w-full overflow-y-auto",
                                         posActiveTab !== 'cart' ? "hidden lg:flex" : "flex"
                                     )}>
                                         
@@ -1067,6 +1533,30 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                                     />
                                                 </div>
                                             </div>
+
+                                            {/* Reference Number & Notes fields */}
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                                                <div className="relative">
+                                                    <Hash size={15} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                                                    <input 
+                                                        type="text"
+                                                        placeholder="رقم المرجع (رقم مرجعي للفاتورة)..."
+                                                        className="w-full pr-10 pl-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-bold dark:text-white focus:outline-none focus:border-blue-550"
+                                                        value={referenceNumber}
+                                                        onChange={(e) => setReferenceNumber(e.target.value)}
+                                                    />
+                                                </div>
+                                                <div className="relative">
+                                                    <FileText size={15} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                                                    <input 
+                                                        type="text"
+                                                        placeholder="ملاحظات وتفاصيل الفاتورة..."
+                                                        className="w-full pr-10 pl-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-xs font-bold dark:text-white focus:outline-none focus:border-blue-550"
+                                                        value={notes}
+                                                        onChange={(e) => setNotes(e.target.value)}
+                                                    />
+                                                </div>
+                                            </div>
      
                                             {isNewPartner && (
                                                 <div className="mt-2.5 flex items-center gap-1.5 p-2 bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-450 rounded-xl text-[10px] font-black">
@@ -1075,6 +1565,154 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                                 </div>
                                             )}
                                         </div>
+     
+                                        {/* Optical Prescription Section (Sales only) */}
+                                        {type === 'sale' && (
+                                            <div className="bg-white dark:bg-[#131b2e] rounded-xl md:rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm shrink-0 overflow-hidden flex flex-col max-h-[400px]">
+                                                <button 
+                                                    type="button" 
+                                                    onClick={() => setShowOpticalSection(!showOpticalSection)} 
+                                                    className="w-full flex items-center justify-between text-left cursor-pointer bg-slate-50 dark:bg-slate-800/50 p-3 md:p-4 sticky top-0 z-10 border-b border-slate-100 dark:border-slate-800"
+                                                >
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="bg-blue-100 dark:bg-blue-500/20 p-2 rounded-xl shrink-0">
+                                                            <Eye size={18} className="text-blue-600 dark:text-blue-400" />
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-slate-900 dark:text-white font-black text-xs md:text-sm">Optical Prescription</div>
+                                                            <div className="text-[10px] text-slate-500 font-bold mt-0.5">
+                                                                {!showOpticalSection && (optRightSph || optLeftSph || optIpd) ? 'RIGHT / LEFT / IPD Completed' : '(بيانات القياس البصري)'}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <span className={cn(
+                                                        "text-[10px] px-3 py-1.5 rounded-full font-black transition-colors shrink-0",
+                                                        showOpticalSection 
+                                                            ? "bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300"
+                                                            : "bg-blue-600 text-white shadow-sm shadow-blue-500/20"
+                                                    )}>
+                                                        {showOpticalSection ? 'إخفاء' : 'فتح وتعديل'}
+                                                    </span>
+                                                </button>
+
+                                                <AnimatePresence>
+                                                    {showOpticalSection && (
+                                                        <motion.div
+                                                            initial={{ height: 0, opacity: 0 }}
+                                                            animate={{ height: "auto", opacity: 1 }}
+                                                            exit={{ height: 0, opacity: 0 }}
+                                                            className="overflow-y-auto custom-scrollbar p-3 md:p-4 space-y-4"
+                                                        >
+                                                            {/* Right Eye */}
+                                                            <div className="border border-rose-100 dark:border-rose-900/30 bg-rose-50/30 dark:bg-rose-900/10 rounded-xl p-3 md:p-4">
+                                                                <h4 className="text-[11px] font-black text-rose-600 dark:text-rose-400 mb-3 flex items-center gap-1.5">
+                                                                    <div className="w-1.5 h-1.5 rounded-full bg-rose-500"></div>
+                                                                    RIGHT EYE (العين اليمنى)
+                                                                </h4>
+                                                                <div className="space-y-3">
+                                                                    <div>
+                                                                        <div className="text-[10px] text-slate-600 dark:text-slate-400 font-bold mb-1.5 text-right">Distance (D)</div>
+                                                                        <div className="grid grid-cols-3 gap-2 md:gap-3" dir="ltr">
+                                                                            <input type="number" step="0.25" placeholder="SPH" className="w-full text-center text-xs py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white font-mono focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all shadow-sm" value={optRightSph} onChange={e => setOptRightSph(e.target.value)} />
+                                                                            <input type="number" step="0.25" placeholder="CYL" className="w-full text-center text-xs py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white font-mono focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all shadow-sm" value={optRightCyl} onChange={e => setOptRightCyl(e.target.value)} />
+                                                                            <input type="number" placeholder="AX" className="w-full text-center text-xs py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white font-mono focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all shadow-sm" value={optRightAx} onChange={e => setOptRightAx(e.target.value)} />
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="h-px bg-rose-100 dark:bg-rose-900/30 w-full my-3"></div>
+                                                                    <div>
+                                                                        <div className="text-[10px] text-slate-600 dark:text-slate-400 font-bold mb-1.5 text-right">Near (N)</div>
+                                                                        <div className="grid grid-cols-3 gap-2 md:gap-3" dir="ltr">
+                                                                            <input type="number" step="0.25" placeholder="SPH" className="w-full text-center text-xs py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white font-mono focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all shadow-sm" value={optRightNearSph} onChange={e => setOptRightNearSph(e.target.value)} />
+                                                                            <input type="number" step="0.25" placeholder="CYL" className="w-full text-center text-xs py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white font-mono focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all shadow-sm" value={optRightNearCyl} onChange={e => setOptRightNearCyl(e.target.value)} />
+                                                                            <input type="number" placeholder="AX" className="w-full text-center text-xs py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white font-mono focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all shadow-sm" value={optRightNearAx} onChange={e => setOptRightNearAx(e.target.value)} />
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+
+                                                            {/* Left Eye */}
+                                                            <div className="border border-blue-100 dark:border-blue-900/30 bg-blue-50/30 dark:bg-blue-900/10 rounded-xl p-3 md:p-4">
+                                                                <h4 className="text-[11px] font-black text-blue-600 dark:text-blue-400 mb-3 flex items-center gap-1.5">
+                                                                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div>
+                                                                    LEFT EYE (العين اليسرى)
+                                                                </h4>
+                                                                <div className="space-y-3">
+                                                                    <div>
+                                                                        <div className="text-[10px] text-slate-600 dark:text-slate-400 font-bold mb-1.5 text-right">Distance (D)</div>
+                                                                        <div className="grid grid-cols-3 gap-2 md:gap-3" dir="ltr">
+                                                                            <input type="number" step="0.25" placeholder="SPH" className="w-full text-center text-xs py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm" value={optLeftSph} onChange={e => setOptLeftSph(e.target.value)} />
+                                                                            <input type="number" step="0.25" placeholder="CYL" className="w-full text-center text-xs py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm" value={optLeftCyl} onChange={e => setOptLeftCyl(e.target.value)} />
+                                                                            <input type="number" placeholder="AX" className="w-full text-center text-xs py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm" value={optLeftAx} onChange={e => setOptLeftAx(e.target.value)} />
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="h-px bg-blue-100 dark:bg-blue-900/30 w-full my-3"></div>
+                                                                    <div>
+                                                                        <div className="text-[10px] text-slate-600 dark:text-slate-400 font-bold mb-1.5 text-right">Near (N)</div>
+                                                                        <div className="grid grid-cols-3 gap-2 md:gap-3" dir="ltr">
+                                                                            <input type="number" step="0.25" placeholder="SPH" className="w-full text-center text-xs py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm" value={optLeftNearSph} onChange={e => setOptLeftNearSph(e.target.value)} />
+                                                                            <input type="number" step="0.25" placeholder="CYL" className="w-full text-center text-xs py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm" value={optLeftNearCyl} onChange={e => setOptLeftNearCyl(e.target.value)} />
+                                                                            <input type="number" placeholder="AX" className="w-full text-center text-xs py-2.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all shadow-sm" value={optLeftNearAx} onChange={e => setOptLeftNearAx(e.target.value)} />
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+
+                                                            {/* Additional Info */}
+                                                            <div className="border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 rounded-xl p-3 md:p-4">
+                                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
+                                                                    <div className="md:col-span-2">
+                                                                        <label className="text-[10px] font-bold text-slate-600 dark:text-slate-400 block mb-1.5 flex items-center gap-1.5"><Sparkles size={12} className="text-amber-500"/> IPD (المسافة بين الحدقتين)</label>
+                                                                        <input type="number" step="0.5" placeholder="Enter IPD..." className="w-full text-center text-xs py-1.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white font-mono focus:outline-none focus:ring-2 focus:ring-slate-500/20 focus:border-slate-500 transition-all shadow-sm" value={optIpd} onChange={e => setOptIpd(e.target.value)} />
+                                                                    </div>
+                                                                    <div className="flex flex-col gap-1.5">
+                                                                        <label className="text-[10px] font-bold text-slate-600 dark:text-slate-400 block">Lens Type (نوع العدسات)</label>
+                                                                        <select
+                                                                            title="Select Lens Type"
+                                                                            value={optLensTypeSelect}
+                                                                            onChange={(e) => {
+                                                                                setOptLensTypeSelect(e.target.value);
+                                                                                if (e.target.value !== "Other") {
+                                                                                    setOptLensType(e.target.value);
+                                                                                } else {
+                                                                                    setOptLensType("");
+                                                                                }
+                                                                            }}
+                                                                            className="w-full text-xs py-1.5 px-3 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white focus:outline-none focus:ring-2 focus:ring-slate-500/20 focus:border-slate-500 transition-all shadow-sm cursor-pointer"
+                                                                        >
+                                                                            <option value="" disabled>Select Lens Type</option>
+                                                                            {lensTypeOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                                                                        </select>
+                                                                        {optLensTypeSelect === "Other" && (
+                                                                            <input type="text" placeholder="Specify other lens..." className="w-full mt-1.5 text-xs py-2.5 px-3 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white focus:outline-none focus:ring-2 focus:ring-slate-500/20 focus:border-slate-500 transition-all shadow-sm" value={optLensType} onChange={e => setOptLensType(e.target.value)} />
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="flex flex-col gap-1.5">
+                                                                        <label className="text-[10px] font-bold text-slate-600 dark:text-slate-400 block">Frame Type (نوع الإطار)</label>
+                                                                        <select
+                                                                            title="Select Frame Type"
+                                                                            value={optFrameTypeSelect}
+                                                                            onChange={(e) => {
+                                                                                setOptFrameTypeSelect(e.target.value);
+                                                                                if (e.target.value !== "Other") {
+                                                                                    setOptFrameType(e.target.value);
+                                                                                } else {
+                                                                                    setOptFrameType("");
+                                                                                }
+                                                                            }}
+                                                                            className="w-full text-xs py-1.5 px-3 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white focus:outline-none focus:ring-2 focus:ring-slate-500/20 focus:border-slate-500 transition-all shadow-sm cursor-pointer"
+                                                                        >
+                                                                            <option value="" disabled>Select Frame Type</option>
+                                                                            {frameTypeOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                                                                        </select>
+                                                                        <input type="text" placeholder="Specify frame details (نوع/تفاصيل الإطار)..." className="w-full mt-1.5 text-xs py-1.5 px-3 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg dark:text-white focus:outline-none focus:ring-2 focus:ring-slate-500/20 focus:border-slate-500 transition-all shadow-sm" value={optFrameType} onChange={e => setOptFrameType(e.target.value)} />
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </motion.div>
+                                                    )}
+                                                </AnimatePresence>
+                                            </div>
+                                        )}
      
                                         {/* Invoice items table panel */}
                                         <div className="bg-white dark:bg-[#131b2e] p-3 md:p-4 rounded-xl md:rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm flex-1 lg:flex-1 lg:min-h-0 flex flex-col overflow-hidden">
@@ -1200,7 +1838,7 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                     </div>
 
                                     {/* Products Catalog Grid */}
-                                    <div className="flex-1 overflow-y-auto grid grid-cols-2 gap-2 mt-2 pr-1 custom-scrollbar">
+                                    <div className="flex-1 overflow-y-auto grid grid-cols-3 gap-1.5 mt-2 pr-1 custom-scrollbar">
                                         {filteredProductsForModal.map(p => {
                                             const activePrice = type === 'sale' ? p.salePrice : p.purchasePrice;
                                             return (
@@ -1208,23 +1846,23 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                                     key={p.id}
                                                     type="button"
                                                     onClick={() => addItem(p)}
-                                                    className="p-3 bg-slate-50 hover:bg-slate-100 dark:bg-slate-900/40 dark:hover:bg-slate-800/50 border border-slate-100 dark:border-slate-800/80 rounded-2xl text-right flex flex-col justify-between hover:border-blue-500/30 transition-all select-none group cursor-pointer"
+                                                    className="p-1.5 bg-slate-50 hover:bg-slate-100 dark:bg-slate-900/40 dark:hover:bg-slate-800/50 border border-slate-100 dark:border-slate-800/80 rounded-xl text-right flex flex-col justify-between hover:border-blue-500/30 transition-all select-none group cursor-pointer"
                                                 >
-                                                    <div className="space-y-1">
-                                                        <div className="text-[10px] text-slate-400 font-bold block truncate">{p.sku}</div>
-                                                        <div className="text-[11px] font-black text-slate-850 dark:text-slate-100 leading-tight block group-hover:text-blue-500 transition-colors line-clamp-2">{p.name}</div>
+                                                    <div className="space-y-0.5">
+                                                        <div className="text-[9px] text-slate-400 font-bold block truncate">{p.sku}</div>
+                                                        <div className="text-[10px] font-black text-slate-850 dark:text-slate-100 leading-tight block group-hover:text-blue-500 transition-colors line-clamp-2">{p.name}</div>
                                                     </div>
-                                                    <div className="flex items-center justify-between mt-3">
+                                                    <div className="flex items-center justify-between mt-1.5">
                                                         <span className="text-[10px] font-mono font-black text-blue-600 dark:text-blue-400">
                                                             {activePrice.toLocaleString()} {currency}
                                                         </span>
                                                         <span className={cn(
-                                                            "text-[9px] px-1.5 py-0.5 rounded-full font-bold",
+                                                            "text-[8px] px-1 py-0.5 rounded-md font-bold",
                                                             p.stock > (p.minStock || 5) 
                                                                 ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-550/10" 
                                                                 : "bg-rose-50 text-rose-600 dark:bg-rose-550/10"
                                                         )}>
-                                                            {p.stock} قطعة
+                                                            {p.stock}
                                                         </span>
                                                     </div>
                                                 </button>
@@ -1241,7 +1879,8 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                     {/* Financial & Box selections on bottom catalog */}
                                     <div className="border-t border-slate-100 dark:border-slate-800 pt-1 mt-1 grid grid-cols-2 gap-1.5 shrink-0 bg-white dark:bg-[#131b2e]">
                                         <select
-                                            className="w-full px-2 py-1 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-[10px] font-bold dark:text-white rounded-lg cursor-pointer h-8"
+                                            className="w-full px-2 py-0.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-[10px] font-bold dark:text-white rounded-lg cursor-pointer h-6"
+                                            style={{ height: '30.9915px' }}
                                             value={paymentType}
                                             onChange={(e) => setPaymentType(e.target.value as any)}
                                         >
@@ -1250,9 +1889,11 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                             ))}
                                         </select>
                                         <select
-                                            className="w-full px-2 py-1 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-[10px] font-bold dark:text-white rounded-lg cursor-pointer h-8"
+                                            className="w-full px-2 py-0.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-[10px] font-bold dark:text-white rounded-lg cursor-pointer h-6 disabled:opacity-50"
+                                            style={{ height: '30.9915px' }}
                                             value={selectedBoxId}
                                             onChange={(e) => setSelectedBoxId(e.target.value)}
+                                            disabled={currentUser?.role !== 'SUPER_ADMIN' && currentUser?.role !== 'ADMIN'}
                                         >
                                             <option value="">-- الصندوق المالي --</option>
                                             {cashBoxes.map(b => (
@@ -1304,10 +1945,13 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                             <span className="text-[8px] text-slate-400 font-black block">المتبقي المطلوب</span>
                                             <span className={cn(
                                                 "text-xs md:text-sm font-black font-mono tracking-tight block",
-                                                remainingAmount > 0 ? "text-rose-600" : "text-emerald-500"
+                                                remainingAmount > 0 ? "text-rose-600" : (remainingAmount < 0 ? "text-amber-500" : "text-emerald-500")
                                             )}>
                                                 {remainingAmount.toLocaleString()} <span className="text-[8px]">YER</span>
                                             </span>
+                                            {remainingAmount < 0 && (
+                                                <div className="text-[8px] text-rose-500 font-black animate-pulse">تنبيه: المبلغ المدفوع يتجاوز الإجمالي</div>
+                                            )}
                                         </div>
                                     </div>
 
@@ -1322,15 +1966,21 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                         </button>
                                         <button 
                                             type="button"
-                                            disabled={isSaving || invoiceItems.length === 0}
+                                            disabled={isSaving || invoiceItems.length === 0 || remainingAmount < 0}
                                             onClick={() => handleSubmit(false)}
                                             className="w-full h-[29px] py-1.5 bg-blue-100 hover:bg-blue-200 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-lg font-black text-[10px] active:scale-95 transition-all text-center shrink-0 cursor-pointer disabled:opacity-40 border-none"
                                         >
-                                            حفظ الفاتورة
+                                            {type === 'sale' 
+                                               ? "حفظ الفاتورة" 
+                                               : type === 'purchase' 
+                                               ? "حفظ الفاتورة" 
+                                               : type === 'sale_return' 
+                                               ? "حفظ مرتجع المبيعات" 
+                                               : "حفظ مرتجع المشتريات"}
                                         </button>
                                         <button 
                                             type="button"
-                                            disabled={isSaving || invoiceItems.length === 0}
+                                            disabled={isSaving || invoiceItems.length === 0 || remainingAmount < 0}
                                             onClick={() => handleSubmit(true)}
                                             className="w-full h-[29px] py-1.5 bg-blue-600 dark:bg-blue-500 hover:bg-blue-700 text-white rounded-lg font-black text-[10px] shadow-md shadow-blue-500/10 active:scale-95 transition-all flex items-center justify-center gap-1 shrink-0 cursor-pointer disabled:opacity-40 border-none"
                                         >
@@ -1362,13 +2012,20 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                             initial={{ opacity: 0, scale: 0.95 }}
                             animate={{ opacity: 1, scale: 1 }}
                             exit={{ opacity: 0, scale: 0.95 }}
-                            className="bg-[#111827] w-full max-w-5xl h-screen md:h-[90dvh] md:rounded-3xl shadow-2xl relative flex flex-col md:flex-row overflow-y-auto md:overflow-hidden md:max-h-none"
+                            drag
+                            dragListener={false}
+                            dragControls={printDragControls}
+                            dragMomentum={false}
+                            className="bg-[#111827] w-full max-w-5xl h-[100dvh] md:h-[90dvh] md:rounded-3xl shadow-2xl relative flex flex-col md:flex-row overflow-hidden"
                         >
                             
                             {/* Controller parameters Left Rail */}
-                            <div className="w-full md:w-80 shrink-0 max-h-[50vh] md:max-h-none bg-white dark:bg-[#131b2e] border-b md:border-b-0 md:border-l border-slate-100 dark:border-slate-850 p-4 md:p-5 flex flex-col justify-between overflow-y-auto">
-                                <div className="space-y-4 md:space-y-6">
-                                    <div className="flex items-center justify-between">
+                            <div className="w-full md:w-80 shrink-0 max-h-[50dvh] md:max-h-full min-h-0 bg-white dark:bg-[#131b2e] border-b md:border-b-0 md:border-l border-slate-100 dark:border-slate-850 p-4 md:p-5 flex flex-col overflow-y-auto">
+                                <div className="space-y-4 md:space-y-6 flex-1 min-h-0">
+                                    <div 
+                                        className="flex items-center justify-between cursor-move pb-2"
+                                        onPointerDown={(e) => printDragControls.start(e)}
+                                    >
                                         <div>
                                             <h4 className="text-sm font-black text-slate-900 dark:text-white">تنسيق المستند المطبوع</h4>
                                             <p className="text-[10px] text-slate-450 dark:text-slate-500 font-bold">بوابة المستندات والطباعة الفورية</p>
@@ -1550,7 +2207,7 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                                                 <span className="text-slate-500 font-bold block md:inline md:mr-1">
                                                                     {printLanguage === 'EN' ? t.EN.invoice_no : t.AR.invoice_no}:
                                                                 </span>
-                                                                <span className="font-mono font-black text-slate-900">#{viewingInvoice.id?.toUpperCase().slice(0, 8)}</span>
+                                                                <span className="font-mono font-black text-slate-900">{viewingInvoice.invoiceNumber || viewingInvoice.id?.toUpperCase().slice(0, 8)}</span>
                                                             </div>
                                                             <div>
                                                                 <span className="text-slate-500 font-bold block md:inline md:mr-1">
@@ -1585,6 +2242,39 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                                             )}
                                                         </div>
                                                     </div>
+
+                                                    {viewingInvoice?.type === 'sale' && viewingInvoice?.opticalPrescription && (
+                                                        <div className="mb-5 border border-slate-300 dark:border-slate-700/50 rounded-xl overflow-hidden p-3 bg-white dark:bg-slate-900/50">
+                                                            <div className="font-black text-xs border-b border-slate-200 dark:border-slate-800 pb-2 mb-2 text-slate-800 dark:text-slate-200">بيانات القياس البصري / Optical Prescription</div>
+                                                            <div className="grid grid-cols-2 gap-4">
+                                                                <div>
+                                                                    <div className="font-bold text-[10px] text-rose-600 mb-1 border-b dark:border-slate-800 pb-0.5">RIGHT EYE (العين اليمنى)</div>
+                                                                    <table className="w-full text-[9px] text-center border-collapse" dir="ltr">
+                                                                        <thead><tr className="bg-slate-50 dark:bg-slate-800/80"><th className="border dark:border-slate-700 p-1"></th><th className="border dark:border-slate-700 p-1">SPH</th><th className="border dark:border-slate-700 p-1">CYL</th><th className="border dark:border-slate-700 p-1">AX</th></tr></thead>
+                                                                        <tbody>
+                                                                            <tr><td className="border dark:border-slate-700 p-1 font-bold text-slate-600 dark:text-slate-400">D</td><td className="border dark:border-slate-700 p-1">{viewingInvoice?.opticalPrescription?.rightEye?.distance?.sph || '-'}</td><td className="border dark:border-slate-700 p-1">{viewingInvoice?.opticalPrescription?.rightEye?.distance?.cyl || '-'}</td><td className="border dark:border-slate-700 p-1">{viewingInvoice?.opticalPrescription?.rightEye?.distance?.ax || '-'}</td></tr>
+                                                                            <tr><td className="border dark:border-slate-700 p-1 font-bold text-slate-600 dark:text-slate-400">N</td><td className="border dark:border-slate-700 p-1">{viewingInvoice?.opticalPrescription?.rightEye?.near?.sph || '-'}</td><td className="border dark:border-slate-700 p-1">{viewingInvoice?.opticalPrescription?.rightEye?.near?.cyl || '-'}</td><td className="border dark:border-slate-700 p-1">{viewingInvoice?.opticalPrescription?.rightEye?.near?.ax || '-'}</td></tr>
+                                                                        </tbody>
+                                                                    </table>
+                                                                </div>
+                                                                <div>
+                                                                    <div className="font-bold text-[10px] text-blue-600 mb-1 border-b dark:border-slate-800 pb-0.5">LEFT EYE (العين اليسرى)</div>
+                                                                    <table className="w-full text-[9px] text-center border-collapse" dir="ltr">
+                                                                        <thead><tr className="bg-slate-50 dark:bg-slate-800/80"><th className="border dark:border-slate-700 p-1"></th><th className="border dark:border-slate-700 p-1">SPH</th><th className="border dark:border-slate-700 p-1">CYL</th><th className="border dark:border-slate-700 p-1">AX</th></tr></thead>
+                                                                        <tbody>
+                                                                            <tr><td className="border dark:border-slate-700 p-1 font-bold text-slate-600 dark:text-slate-400">D</td><td className="border dark:border-slate-700 p-1">{viewingInvoice?.opticalPrescription?.leftEye?.distance?.sph || '-'}</td><td className="border dark:border-slate-700 p-1">{viewingInvoice?.opticalPrescription?.leftEye?.distance?.cyl || '-'}</td><td className="border dark:border-slate-700 p-1">{viewingInvoice?.opticalPrescription?.leftEye?.distance?.ax || '-'}</td></tr>
+                                                                            <tr><td className="border dark:border-slate-700 p-1 font-bold text-slate-600 dark:text-slate-400">N</td><td className="border dark:border-slate-700 p-1">{viewingInvoice?.opticalPrescription?.leftEye?.near?.sph || '-'}</td><td className="border dark:border-slate-700 p-1">{viewingInvoice?.opticalPrescription?.leftEye?.near?.cyl || '-'}</td><td className="border dark:border-slate-700 p-1">{viewingInvoice?.opticalPrescription?.leftEye?.near?.ax || '-'}</td></tr>
+                                                                        </tbody>
+                                                                    </table>
+                                                                </div>
+                                                            </div>
+                                                            <div className="grid grid-cols-3 gap-2 mt-3 pt-2 border-t border-slate-100 dark:border-slate-700 text-[9px]">
+                                                                <div><span className="font-bold text-slate-500">IPD:</span> <span className="font-black">{viewingInvoice?.opticalPrescription?.ipd || '-'}</span></div>
+                                                                <div><span className="font-bold text-slate-500">Lens / نوع العدسات:</span> <span className="font-black">{viewingInvoice?.opticalPrescription?.lensType || '-'}</span></div>
+                                                                <div><span className="font-bold text-slate-500">Frame / نوع الإطار:</span> <span className="font-black">{viewingInvoice?.opticalPrescription?.frameType || '-'}</span></div>
+                                                            </div>
+                                                        </div>
+                                                    )}
 
                                                     {/* Accounting items list table */}
                                                     <table className="w-full mb-6 text-[11px] md:text-xs">
@@ -1679,6 +2369,22 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                                             <p>{printLanguage === 'EN' ? t.EN.terms_4 : t.AR.terms_4}</p>
                                                         </div>
                                                     )}
+
+                                                    {/* Audit Tracking Section */}
+                                                    <div className="border border-slate-200 bg-slate-50/50 rounded-xl p-3 my-4 grid grid-cols-2 gap-4 text-[9px] text-slate-500 font-medium print:break-inside-avoid">
+                                                        <div>
+                                                            <div className="text-slate-400 font-bold mb-1 uppercase tracking-wider text-[8px]">Created By / تم الإنشاء بواسطة</div>
+                                                            <div className="font-bold text-slate-700">{(viewingInvoice as any).createdByName || 'System User'}</div>
+                                                            <div>{new Date(viewingInvoice.createdAt || new Date()).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}</div>
+                                                        </div>
+                                                        {viewingInvoice.updatedAt && viewingInvoice.updatedAt !== viewingInvoice.createdAt && (
+                                                            <div>
+                                                                <div className="text-slate-400 font-bold mb-1 uppercase tracking-wider text-[8px]">Last Modified By / آخر تعديل بواسطة</div>
+                                                                <div className="font-bold text-slate-700">{(viewingInvoice as any).updatedByName || (viewingInvoice as any).createdByName || 'System User'}</div>
+                                                                <div>{new Date(viewingInvoice.updatedAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}</div>
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                 </div>
 
                                                 {/* Corporate stamp labels footer */}
@@ -1690,6 +2396,10 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                                     <p className="text-center text-slate-500 font-bold text-[10px] bg-slate-50 py-2 rounded-lg">
                                                         {storeSettings?.printFooterText || (printLanguage === 'EN' ? t.EN.footer_message : t.AR.footer_message)}
                                                     </p>
+                                                    <div className="text-center text-[8px] text-slate-400 mt-4 font-medium leading-tight">
+                                                        <div>Generated by ASSAR Optical Accounting</div>
+                                                        <div>Designed & Developed By Mohammed Assubaihi | Mobile: 779391682</div>
+                                                    </div>
                                                 </div>
                                             </div>
                                         ) : (
@@ -1713,7 +2423,9 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                                 <div className="space-y-1 text-[9px] leading-tight">
                                                     <div>
                                                         <span>رقم الفاتورة / No:</span>
-                                                        <span className="font-mono font-black ml-1">#{viewingInvoice.id?.toUpperCase().slice(0, 8)}</span>
+                                                        <span className="font-mono font-black ml-1">
+                                                            {viewingInvoice.invoiceNumber || viewingInvoice.id?.toUpperCase().slice(0, 8)}
+                                                        </span>
                                                     </div>
                                                     <div>
                                                         <span>التاريخ / Date:</span>
@@ -1731,9 +2443,67 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                                             <span className="font-mono ml-1">{(viewingInvoice as any).partnerPhone}</span>
                                                         </div>
                                                     )}
+                                                    {viewingInvoice.referenceNumber && (
+                                                        <div>
+                                                            <span>المرجع / Ref No:</span>
+                                                            <span className="font-mono font-bold ml-1">{viewingInvoice.referenceNumber}</span>
+                                                        </div>
+                                                    )}
                                                 </div>
 
                                                 <div className="border-t border-dashed border-black/80 my-2" />
+
+                                                {/* Thermal Optical Prescription */}
+                                                {viewingInvoice.type === 'sale' && viewingInvoice.opticalPrescription && (
+                                                    <div className="mb-2 text-[8px] leading-tight space-y-1" dir="ltr">
+                                                        <div className="font-black text-center border-b border-dashed border-black/30 pb-0.5 mb-1">Optical Prescription / قياسات النظر</div>
+                                                        
+                                                        <table className="w-full text-[8px] text-center border border-dashed border-black/30 my-1 font-mono">
+                                                            <thead>
+                                                                <tr className="border-b border-dashed border-black/30 bg-black/5">
+                                                                    <th className="p-0.5 font-bold border-r border-dashed border-black/30">Eye</th>
+                                                                    <th className="p-0.5 font-bold border-r border-dashed border-black/30">SPH</th>
+                                                                    <th className="p-0.5 font-bold border-r border-dashed border-black/30">CYL</th>
+                                                                    <th className="p-0.5 font-bold">AX</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody>
+                                                                <tr className="border-b border-dashed border-black/30">
+                                                                    <td className="p-0.5 font-bold border-r border-dashed border-black/30">R (D)</td>
+                                                                    <td className="p-0.5 border-r border-dashed border-black/30">{viewingInvoice.opticalPrescription.rightEye?.distance?.sph || '-'}</td>
+                                                                    <td className="p-0.5 border-r border-dashed border-black/30">{viewingInvoice.opticalPrescription.rightEye?.distance?.cyl || '-'}</td>
+                                                                    <td className="p-0.5">{viewingInvoice.opticalPrescription.rightEye?.distance?.ax || '-'}</td>
+                                                                </tr>
+                                                                <tr className="border-b border-dashed border-black/30">
+                                                                    <td className="p-0.5 font-bold border-r border-dashed border-black/30">L (D)</td>
+                                                                    <td className="p-0.5 border-r border-dashed border-black/30">{viewingInvoice.opticalPrescription.leftEye?.distance?.sph || '-'}</td>
+                                                                    <td className="p-0.5 border-r border-dashed border-black/30">{viewingInvoice.opticalPrescription.leftEye?.distance?.cyl || '-'}</td>
+                                                                    <td className="p-0.5">{viewingInvoice.opticalPrescription.leftEye?.distance?.ax || '-'}</td>
+                                                                </tr>
+                                                                <tr className="border-b border-dashed border-black/30">
+                                                                    <td className="p-0.5 font-bold border-r border-dashed border-black/30">R (N)</td>
+                                                                    <td className="p-0.5 border-r border-dashed border-black/30">{viewingInvoice.opticalPrescription.rightEye?.near?.sph || '-'}</td>
+                                                                    <td className="p-0.5 border-r border-dashed border-black/30">{viewingInvoice.opticalPrescription.rightEye?.near?.cyl || '-'}</td>
+                                                                    <td className="p-0.5">{viewingInvoice.opticalPrescription.rightEye?.near?.ax || '-'}</td>
+                                                                </tr>
+                                                                <tr>
+                                                                    <td className="p-0.5 font-bold border-r border-dashed border-black/30">L (N)</td>
+                                                                    <td className="p-0.5 border-r border-dashed border-black/30">{viewingInvoice.opticalPrescription.leftEye?.near?.sph || '-'}</td>
+                                                                    <td className="p-0.5 border-r border-dashed border-black/30">{viewingInvoice.opticalPrescription.leftEye?.near?.cyl || '-'}</td>
+                                                                    <td className="p-0.5">{viewingInvoice.opticalPrescription.leftEye?.near?.ax || '-'}</td>
+                                                                </tr>
+                                                            </tbody>
+                                                        </table>
+                                                        
+                                                        <div className="flex justify-between font-mono text-[8px] pt-1">
+                                                            <span>IPD: <b>{viewingInvoice.opticalPrescription.ipd || '-'}</b></span>
+                                                            <span className="truncate max-w-[90px]">Lens: <b>{viewingInvoice.opticalPrescription.lensType || '-'}</b></span>
+                                                            <span className="truncate max-w-[90px]">Frame: <b>{viewingInvoice.opticalPrescription.frameType || '-'}</b></span>
+                                                        </div>
+                                                        
+                                                        <div className="border-t border-dashed border-black/80 my-2" />
+                                                    </div>
+                                                )}
 
                                                 {/* Slender simple table */}
                                                 <table className="w-full text-[9px]">
@@ -1796,6 +2566,18 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                                     </div>
                                                 )}
 
+                                                {/* Audit Tracking Section Thermal */}
+                                                <div className="border-t border-b border-dashed border-black/80 py-1 my-2 text-[7px] text-center font-mono">
+                                                    <div>Created By: {(viewingInvoice as any).createdByName || 'System'}</div>
+                                                    <div>{new Date(viewingInvoice.createdAt || new Date()).toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' })}</div>
+                                                    {viewingInvoice.updatedAt && viewingInvoice.updatedAt !== viewingInvoice.createdAt && (
+                                                        <>
+                                                            <div className="mt-1">Mod By: {(viewingInvoice as any).updatedByName || (viewingInvoice as any).createdByName || 'System'}</div>
+                                                            <div>{new Date(viewingInvoice.updatedAt).toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' })}</div>
+                                                        </>
+                                                    )}
+                                                </div>
+
                                                 <div className="flex justify-center my-3">
                                                     <div className="w-14 h-14 bg-slate-150 p-0.5">
                                                         {generateQR(viewingInvoice.id || "SYS", (viewingInvoice.total - viewingInvoice.discount))}
@@ -1805,6 +2587,10 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                                 <div className="text-center text-[9px] font-black tracking-tight mt-2">
                                                     {printLanguage === 'EN' ? t.EN.footer_message : t.AR.footer_message}
                                                     <p className="text-[8px] mt-0.5 font-bold">⭐⭐⭐⭐⭐</p>
+                                                    <div className="mt-2 text-[6px] text-slate-600 font-medium leading-tight">
+                                                        <div>Generated by ASSAR Optical Accounting</div>
+                                                        <div>Developed By Mohammed Assubaihi | 779391682</div>
+                                                    </div>
                                                 </div>
                                             </div>
                                         )}
@@ -1833,15 +2619,22 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                             initial={{ opacity: 0, scale: 0.95 }}
                             animate={{ opacity: 1, scale: 1 }}
                             exit={{ opacity: 0, scale: 0.95 }}
-                            className="bg-white dark:bg-[#131b2e] w-full max-w-md rounded-3xl shadow-2xl relative overflow-hidden"
+                            drag
+                            dragListener={false}
+                            dragControls={paymentDragControls}
+                            dragMomentum={false}
+                            className="bg-white dark:bg-[#131b2e] w-full max-w-md rounded-3xl shadow-2xl relative max-h-[90dvh] flex flex-col overflow-hidden"
                         >
-                            <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-900">
+                            <div 
+                                className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-900 shrink-0 cursor-move"
+                                onPointerDown={(e) => paymentDragControls.start(e)}
+                            >
                                 <h3 className="font-bold text-slate-800 dark:text-white">تسجيل دفعة جزئية للفاتورة</h3>
                                 <button onClick={() => setIsRecordingPayment(false)} className="text-slate-400 hover:text-slate-600 cursor-pointer">
                                     <X size={20} />
                                 </button>
                             </div>
-                            <div className="p-5 space-y-4">
+                            <div className="p-5 space-y-4 overflow-y-auto">
                                 <div className="grid grid-cols-2 gap-3">
                                     <div className="p-3 bg-emerald-50 dark:bg-emerald-500/5 rounded-xl border border-emerald-100 dark:border-emerald-500/10 text-center">
                                         <div className="text-[10px] font-black text-emerald-650 uppercase">المسجل سابقاً</div>
@@ -1867,7 +2660,6 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                             onChange={(e) => setPaymentAmount(Number(e.target.value))}
                                             autoFocus
                                             min="1"
-                                            max={(invoices.find(i => i.id === recordingInvoiceId)?.total! - invoices.find(i => i.id === recordingInvoiceId)?.discount! - invoices.find(i => i.id === recordingInvoiceId)?.paid!)}
                                         />
                                     </div>
                                 </div>
@@ -1875,9 +2667,10 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                     <label className="text-xs font-bold text-slate-500">الصندوق المستلم</label>
                                     <select 
                                         required
-                                        className="w-full px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-755 rounded-xl font-bold text-xs cursor-pointer dark:text-white"
+                                        className="w-full px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-755 rounded-xl font-bold text-xs cursor-pointer dark:text-white disabled:opacity-50"
                                         value={recordingBoxId}
                                         onChange={(e) => setRecordingBoxId(e.target.value)}
+                                        disabled={currentUser?.role !== 'SUPER_ADMIN' && currentUser?.role !== 'ADMIN'}
                                     >
                                         <option value="">-- اختر وجهة الصندوق --</option>
                                         {cashBoxes.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
@@ -1920,7 +2713,7 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                 <div>
                                     <h3 className="text-sm font-black text-slate-900 dark:text-white">تأكيد حذف الفاتورة</h3>
                                     <p className="text-xs text-slate-400 mt-1">
-                                        هل أنت متأكد من حذف الفاتورة رقم <span className="font-bold text-rose-600">#{invoiceToDelete.id?.slice(0, 8).toUpperCase()}</span>؟ هذه العملية لا تراجع فيها.
+                                        هل أنت متأكد من حذف الفاتورة رقم <span className="font-bold text-rose-600">#{invoiceToDelete.invoiceNumber || invoiceToDelete.id?.slice(0, 8).toUpperCase()}</span>؟ هذه العملية لا تراجع فيها.
                                     </p>
                                 </div>
                                 <div className="flex gap-2 pt-2">
@@ -1938,6 +2731,45 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
                                         تأكيد الحذف
                                     </button>
                                 </div>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
+
+            {/* Validation Error Modal */}
+            <AnimatePresence>
+                {validationError && (
+                    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            onClick={() => setValidationError(null)}
+                            className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+                        />
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                            className="bg-white dark:bg-[#131b2e] w-full max-w-sm rounded-3xl shadow-2xl relative overflow-hidden z-10 border border-rose-100 dark:border-rose-500/20"
+                        >
+                            <div className="p-6 text-center space-y-4">
+                                <div className="w-16 h-16 bg-rose-50 dark:bg-rose-500/10 text-rose-600 rounded-full flex items-center justify-center mx-auto">
+                                    <AlertCircle size={32} />
+                                </div>
+                                <div className="space-y-2">
+                                    <h3 className="text-lg font-black text-slate-900 dark:text-white">تنبيه: خطأ في المبلغ</h3>
+                                    <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
+                                        {validationError}
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => setValidationError(null)}
+                                    className="w-full py-3.5 bg-rose-600 text-white rounded-2xl font-black text-sm shadow-lg shadow-rose-600/20 hover:bg-rose-700 transition-all cursor-pointer border-none"
+                                >
+                                    إغلاق لتعديل المبلغ
+                                </button>
                             </div>
                         </motion.div>
                     </div>

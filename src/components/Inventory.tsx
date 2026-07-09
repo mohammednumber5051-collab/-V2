@@ -1,9 +1,11 @@
+import { syncEngine } from "../services/syncEngine";
 import React, { useState, useEffect } from "react";
 import { Plus, Search, Edit2, Trash2, AlertCircle, X, ChevronDown, ChevronUp, Clock, Eye } from "lucide-react";
 import { dbService } from "../services/db";
 import { Product, Category, OpticalAttributes } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import { cn, hasPermission } from "../lib/utils";
+import ProductLedgerModal from "./ProductLedgerModal";
 
 const categories: Category[] = [
     'إطارات نظارات', 
@@ -42,6 +44,7 @@ export default function Inventory({ currentUser: propCurrentUser }: { currentUse
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
     const [expandedProductDetail, setExpandedProductDetail] = useState<string | null>(null);
+    const [viewingLedgerProduct, setViewingLedgerProduct] = useState<Product | null>(null);
 
     const [formData, setFormData] = useState<Partial<Product>>({
         name: "",
@@ -56,6 +59,10 @@ export default function Inventory({ currentUser: propCurrentUser }: { currentUse
 
     useEffect(() => {
         loadProducts(true);
+        const unsubscribe = syncEngine.subscribe('DATA_CHANGED', () => {
+            loadProducts(true);
+        });
+        return unsubscribe;
     }, []);
 
     const loadProducts = async (reset: boolean = false) => {
@@ -73,7 +80,13 @@ export default function Inventory({ currentUser: propCurrentUser }: { currentUse
             // or we use simple field constraints. For safety on mobile, we load chunks.
             const res = await dbService.getPaginated("products", 25, reset ? null : lastDoc, []);
             
-            setProducts(prev => reset ? res.data as Product[] : [...prev, ...res.data as Product[]]);
+            setProducts(prev => {
+                const newData = res.data as Product[];
+                if (reset) return newData;
+                const existingIds = new Set(prev.map(p => p.id).filter(Boolean));
+                const filteredNew = newData.filter(p => !existingIds.has(p.id));
+                return [...prev, ...filteredNew];
+            });
             setLastDoc(res.lastDoc);
             setHasMore(res.hasMore);
         } catch (error) {
@@ -105,6 +118,11 @@ export default function Inventory({ currentUser: propCurrentUser }: { currentUse
 
     const confirmDeleteProduct = async () => {
         if (!productToDelete || !productToDelete.id) return;
+        if (!hasPermission(currentUser, 'delete_inventory')) {
+            alert("عذراً، لا تملك صلاحية حذف الأصناف.");
+            setProductToDelete(null);
+            return;
+        }
         setIsSaving(true);
         try {
             await dbService.softDelete("products", productToDelete.id);
@@ -119,14 +137,32 @@ export default function Inventory({ currentUser: propCurrentUser }: { currentUse
     };
 
     const executeSave = async () => {
+        if (editingProduct?.id && !hasPermission(currentUser, 'edit_inventory')) {
+            alert("عذراً، لا تملك صلاحية تعديل الأصناف.");
+            return;
+        }
         setIsSaving(true);
         try {
             const dataToSave = {
                 ...formData,
                 updatedAt: new Date().toISOString()
             };
+
+            let customDesc = "";
             if (editingProduct?.id) {
+                const priceChanged = Number(formData.salePrice) !== Number(editingProduct.salePrice);
+                const stockChanged = Number(formData.stock) !== Number(editingProduct.stock);
+                
+                if (priceChanged && stockChanged) {
+                    customDesc = `تعديل سعر وكمية الصنف: ${formData.name} (السعر: ${formData.salePrice}، الكمية: ${formData.stock})`;
+                } else if (priceChanged) {
+                    customDesc = `تعديل سعر الصنف: ${formData.name} من ${editingProduct.salePrice} إلى ${formData.salePrice}`;
+                } else if (stockChanged) {
+                    customDesc = `تعديل كمية الصنف: ${formData.name} يدوياً إلى ${formData.stock}`;
+                }
+                
                 await dbService.update("products", editingProduct.id, dataToSave);
+                await dbService.logAudit('UPDATE', 'Product', editingProduct.id, customDesc, null, null, null);
                 alert("تم تحديث المنتج بنجاح");
             } else {
                 await dbService.add("products", dataToSave);
@@ -222,7 +258,7 @@ export default function Inventory({ currentUser: propCurrentUser }: { currentUse
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
                     </div>
-                    {hasPermission(currentUser, 'edit_inventory') && (
+                    {hasPermission(currentUser, 'add_inventory') && (
                         <button
                             onClick={() => {
                                 setEditingProduct(null);
@@ -262,7 +298,7 @@ export default function Inventory({ currentUser: propCurrentUser }: { currentUse
                             layout
                             initial={{ opacity: 0, y: 10 }}
                             animate={{ opacity: 1, y: 0 }}
-                            className="bg-white dark:bg-[#131b2e] p-4 rounded-3xl border border-slate-100 dark:border-slate-800 shadow-sm active:bg-slate-50 dark:active:bg-slate-800/40 transition-colors flex items-center justify-between gap-4"
+                            className="bg-white dark:bg-[#131b2e] p-3 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm active:bg-slate-50 dark:active:bg-slate-800/40 transition-colors flex items-center justify-between gap-3"
                         >
                             <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 mb-1">
@@ -274,7 +310,14 @@ export default function Inventory({ currentUser: propCurrentUser }: { currentUse
                                         </div>
                                     )}
                                 </div>
-                                <h3 className="text-sm font-black text-slate-800 dark:text-white truncate leading-tight mb-1">{p.name}</h3>
+                                <h3 
+                                    onClick={() => setViewingLedgerProduct(p)}
+                                    className="text-sm font-black text-slate-800 dark:text-white truncate leading-tight mb-1 hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline cursor-pointer flex items-center gap-1.5 transition-colors"
+                                    title="عرض كشف حركة الصنف التفصيلي"
+                                >
+                                    <span>{p.name}</span>
+                                    <Clock size={12} className="text-slate-400 opacity-60 shrink-0" />
+                                </h3>
                                 <div className="flex items-center gap-3 font-mono text-[11px] font-bold">
                                     <span className="text-emerald-600 dark:text-emerald-400">{(p.salePrice || 0).toLocaleString()} <span className="opacity-50 text-[9px]">YER</span></span>
                                     <span className={cn(
@@ -283,10 +326,13 @@ export default function Inventory({ currentUser: propCurrentUser }: { currentUse
                                     )}>
                                         موجود: {typeof p.stock === 'object' ? 0 : (p.stock || 0)}
                                     </span>
+                                    <span className="text-slate-400 font-medium text-[9px] mr-2">
+                                        بواسطة: {(p as any).createdByName || 'النظام'}
+                                    </span>
                                 </div>
                             </div>
-                            {hasPermission(currentUser, 'edit_inventory') && (
-                                <div className="flex items-center gap-1 px-1">
+                            <div className="flex items-center gap-1 px-1">
+                                {hasPermission(currentUser, 'edit_inventory') && (
                                     <button 
                                         onClick={() => {
                                             setEditingProduct(p);
@@ -297,14 +343,16 @@ export default function Inventory({ currentUser: propCurrentUser }: { currentUse
                                     >
                                         <Edit2 size={18} />
                                     </button>
+                                )}
+                                {hasPermission(currentUser, 'delete_inventory') && (
                                     <button 
                                         onClick={() => setProductToDelete(p)}
                                         className="p-3 text-slate-400 hover:text-rose-500 transition-colors"
                                     >
                                         <Trash2 size={18} />
                                     </button>
-                                </div>
-                            )}
+                                )}
+                            </div>
                         </motion.div>
                     ))}
                 </AnimatePresence>
@@ -651,6 +699,14 @@ export default function Inventory({ currentUser: propCurrentUser }: { currentUse
                             </div>
                         </motion.div>
                     </div>
+                )}
+
+                {/* Product Movement Ledger Modal */}
+                {viewingLedgerProduct && (
+                    <ProductLedgerModal 
+                        product={viewingLedgerProduct}
+                        onClose={() => setViewingLedgerProduct(null)}
+                    />
                 )}
             </AnimatePresence>
         </div>

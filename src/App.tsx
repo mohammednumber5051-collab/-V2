@@ -21,13 +21,15 @@ import {
   Sun,
   ShieldAlert,
   Sliders,
-  Lock
+  Lock,
+  Download
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn, hasPermission } from "./lib/utils";
 import { AppUser } from "./types";
 import { dbService } from "./services/db";
 import { authService } from "./services/authService";
+import { migrationService } from "./services/migration";
 import { waitForAuth } from "./firebase";
 
 import { App as CapApp } from '@capacitor/app';
@@ -49,9 +51,11 @@ import DailyLedger from "./components/DailyLedger";
 import OpticalHub from "./components/OpticalHub";
 import EnterpriseSettings from "./components/EnterpriseSettings";
 import AuditLogs from "./components/AuditLogs";
+import Vouchers from "./components/Vouchers";
 import LockScreen from "./components/LockScreen";
+import PWAInstallPrompt from "./components/PWAInstallPrompt";
 
-type Page = 'dashboard' | 'invoices' | 'inventory' | 'transactions' | 'reports' | 'partners' | 'users' | 'quick_entry' | 'quick_entries_history' | 'daily_ledger' | 'optical_hub' | 'settings' | 'audit_logs';
+type Page = 'dashboard' | 'invoices' | 'inventory' | 'transactions' | 'vouchers' | 'reports' | 'partners' | 'users' | 'quick_entry' | 'quick_entries_history' | 'daily_ledger' | 'optical_hub' | 'settings' | 'audit_logs';
 
 const bottomNavItems = [
   { id: 'dashboard', label: 'الرئيسية', icon: BarChart3 },
@@ -62,6 +66,7 @@ const bottomNavItems = [
 ];
 
 const drawerItems = [
+  { id: 'vouchers', label: 'سندات القبض والصرف', icon: FileText },
   { id: 'reports', label: 'التقارير المالية', icon: FileText },
   { id: 'optical_hub', label: 'مركز الصيانة', icon: Eye },
   { id: 'quick_entry', label: 'الإدخال المالي السريع', icon: Zap },
@@ -190,21 +195,59 @@ function AppContent() {
     document.documentElement.setAttribute('lang', 'ar');
     
     const checkSession = async () => {
+      const timeout = setTimeout(() => {
+        console.warn("Session init timed out, forcing initialization.");
+        setIsInitialized(true);
+      }, 5000);
+
       try {
         // Ensure Firebase Auth is ready (and anonymous login check performed)
         await waitForAuth();
+        await authService.initialize();
         
         const _currentUser = await authService.validateSession();
         if (_currentUser) {
            setCurrentUser(_currentUser);
+           migrationService.migrateOldInvoices().catch(console.error);
         }
       } catch (err) {
         console.error("Session init failed", err);
       } finally {
+        clearTimeout(timeout);
         setIsInitialized(true);
       }
     };
     checkSession();
+
+    // Clean up local storage cache for previously deleted customers "محمد الصبيحي" and "حسن عبدالله عامر"
+    try {
+      const collections = ["customers", "invoices", "transactions", "quick_financial_entries"];
+      collections.forEach(coll => {
+        const raw = localStorage.getItem(`fp_db_${coll}`);
+        if (raw) {
+          const list = JSON.parse(raw);
+          if (Array.isArray(list)) {
+            const cleanList = list.filter((item: any) => {
+              if (coll === "customers") {
+                if (item.name === "محمد الصبيحي" || item.name === "حسن عبدالله عامر" || item.name?.includes("الصبيحي") || item.name?.includes("حسن عبدالله عامر")) {
+                  return false;
+                }
+              }
+              if (item.partnerName === "محمد الصبيحي" || item.partnerName === "حسن عبدالله عامر" || item.partnerName?.includes("الصبيحي") || item.partnerName?.includes("حسن عبدالله عامر")) {
+                return false;
+              }
+              return true;
+            });
+            if (cleanList.length !== list.length) {
+              localStorage.setItem(`fp_db_${coll}`, JSON.stringify(cleanList));
+              console.log(`Pristine cache: cleaned ${list.length - cleanList.length} items from fp_db_${coll}`);
+            }
+          }
+        }
+      });
+    } catch (e) {
+      console.error("Local storage cache clean-up failed", e);
+    }
   }, []);
 
   useEffect(() => {
@@ -269,10 +312,11 @@ function AppContent() {
       case 'dashboard': return <Dashboard onNavigate={(page: any) => setActivePage(page)} currentUser={currentUser} />;
       case 'invoices': return <InvoicesWrapper currentUser={currentUser} />;
       case 'inventory': return <Inventory currentUser={currentUser} />;
-      case 'transactions': return <Transactions currentUser={currentUser} />;
+      case 'transactions': return <Transactions currentUser={currentUser} onNavigate={(p: any) => setActivePage(p as any)} />;
+      case 'vouchers': return <Vouchers currentUser={currentUser} />;
       case 'reports': return <Reports />;
       case 'partners': return <PartnersWrapper />;
-      case 'users': return <Users />;
+      case 'users': return <Users currentUser={currentUser} />;
       case 'quick_entry': return <QuickEntry currentUser={currentUser} onNavigate={(p: any, params?: any) => {
         if (p === 'quick_entry' && params?.editId) {
           setEditQuickEntryId(params.editId);
@@ -281,7 +325,7 @@ function AppContent() {
         }
         setActivePage(p);
       }} editId={editQuickEntryId} />;
-      case 'quick_entries_history': return <QuickEntriesHistory onNavigate={(p: any, params?: any) => {
+      case 'quick_entries_history': return <QuickEntriesHistory currentUser={currentUser} onNavigate={(p: any, params?: any) => {
         if (p === 'quick_entry' && params?.editId) {
           setEditQuickEntryId(params.editId);
         } else if (p === 'quick_entry') {
@@ -289,7 +333,7 @@ function AppContent() {
         }
         setActivePage(p);
       }} />;
-      case 'daily_ledger': return <DailyLedger />;
+      case 'daily_ledger': return <DailyLedger currentUser={currentUser} />;
       case 'optical_hub': return <OpticalHub />;
       case 'settings': return <EnterpriseSettings />;
       case 'audit_logs': return <AuditLogs />;
@@ -407,6 +451,19 @@ function AppContent() {
                       {item.label}
                     </button>
                   ))}
+                </div>
+
+                <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800/40">
+                  <button
+                    onClick={() => {
+                      window.dispatchEvent(new CustomEvent("show-pwa-install-modal"));
+                      setIsSidebarOpen(false);
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all cursor-pointer font-black duration-200 text-xs text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/10 border border-dashed border-blue-200 dark:border-blue-500/30"
+                  >
+                    <Download size={16} className="text-blue-600 dark:text-blue-400 animate-pulse" />
+                    تثبيت التطبيق على الجهاز 📱💻
+                  </button>
                 </div>
               </nav>
 
@@ -576,6 +633,9 @@ function AppContent() {
           ))}
         </div>
       )}
+
+      {/* Custom PWA Install prompt notification banner */}
+      <PWAInstallPrompt />
 
       </div>
     </div>

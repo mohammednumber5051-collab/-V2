@@ -111,8 +111,8 @@ export default function OpticalHub() {
     // Form handlers
     const addRepair = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!repairForm.customerName || !repairForm.phone) {
-            alert("يرجى إدخال اسم العميل ورقم الهاتف");
+        if (!repairForm.customerName) {
+            alert("يرجى إدخال اسم العميل");
             return;
         }
         setSaving(true);
@@ -727,7 +727,7 @@ export default function OpticalHub() {
                         <div className="p-5 pb-4 border-b border-slate-100 dark:border-slate-800 shrink-0">
                             <h3 className="text-base font-black text-slate-800 dark:text-white">سند صيانة وإصلاح جديد</h3>
                         </div>
-                        <form onSubmit={addRepair} className="flex flex-col flex-1 overflow-hidden">
+                        <form onSubmit={addRepair} className="flex flex-col flex-1 overflow-hidden min-h-0">
                             <div className="space-y-4 text-xs overflow-y-auto p-5 custom-scrollbar flex-1 bg-white dark:bg-[#131b2e]">
                                 <div className="space-y-1">
                                     <label className="text-slate-500 font-bold block">اسم العميل ورقم المريض:</label>
@@ -741,10 +741,9 @@ export default function OpticalHub() {
                                     />
                                 </div>
                                 <div className="space-y-1">
-                                    <label className="text-slate-500 font-bold block">رقم الجوال:</label>
+                                    <label className="text-slate-500 font-bold block">رقم الجوال (اختياري):</label>
                                     <input 
                                         type="text" 
-                                        required
                                         placeholder="967xxxxxxxxx" 
                                         className="w-full px-3 py-2 border rounded-lg focus:outline-blue-500 text-sm"
                                         value={repairForm.phone}
@@ -802,7 +801,7 @@ export default function OpticalHub() {
                         <div className="p-5 pb-4 border-b border-slate-100 dark:border-slate-800 shrink-0">
                             <h3 className="text-base font-black text-slate-800 dark:text-white">طلب تفصيل عدسة / إطار خاص</h3>
                         </div>
-                        <form onSubmit={addSpecialOrder} className="flex flex-col flex-1 overflow-hidden">
+                        <form onSubmit={addSpecialOrder} className="flex flex-col flex-1 overflow-hidden min-h-0">
                             <div className="space-y-4 text-xs overflow-y-auto p-5 custom-scrollbar flex-1 bg-white dark:bg-[#131b2e]">
                                 <div className="space-y-1">
                                     <label className="text-slate-500 font-bold block">اسم العميل:</label>
@@ -816,10 +815,9 @@ export default function OpticalHub() {
                                     />
                                 </div>
                                 <div className="space-y-1">
-                                    <label className="text-slate-500 font-bold block">رقم الجوال:</label>
+                                    <label className="text-slate-500 font-bold block">رقم الجوال (اختياري):</label>
                                     <input 
                                         type="text" 
-                                        required
                                         placeholder="967..." 
                                         className="w-full px-3 py-2 border rounded-lg text-sm"
                                         value={orderForm.phone}
@@ -877,7 +875,7 @@ export default function OpticalHub() {
                         <div className="p-5 pb-4 border-b border-slate-100 dark:border-slate-800 shrink-0">
                             <h3 className="text-base font-black text-slate-800 dark:text-white">إصدار كرت ضمان نظارة جديد</h3>
                         </div>
-                        <form onSubmit={addWarranty} className="flex flex-col flex-1 overflow-hidden">
+                        <form onSubmit={addWarranty} className="flex flex-col flex-1 overflow-hidden min-h-0">
                             <div className="space-y-4 text-xs overflow-y-auto p-5 custom-scrollbar flex-1 bg-white dark:bg-[#131b2e]">
                                 <div className="space-y-1">
                                     <label className="text-slate-500 font-bold block">اسم العميل:</label>

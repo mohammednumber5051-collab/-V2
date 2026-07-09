@@ -1,3 +1,4 @@
+import { syncEngine } from "../services/syncEngine";
 import React, { useState, useEffect } from "react";
 import { Plus, Save, Trash2, Edit2, Check, ArrowRight } from "lucide-react";
 import { dbService } from "../services/db";
@@ -16,10 +17,11 @@ interface LedgerRow {
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
-export default function DailyLedger() {
+export default function DailyLedger({ currentUser }: { currentUser?: any }) {
     const [rows, setRows] = useState<LedgerRow[]>([]);
     const [isSaving, setIsSaving] = useState(false);
-    const [hasCashBox, setHasCashBox] = useState(false);
+    const [cashBoxes, setCashBoxes] = useState<CashBox[]>([]);
+    const [selectedBoxId, setSelectedBoxId] = useState<string>("");
 
     useEffect(() => {
         checkCashBoxes();
@@ -31,7 +33,16 @@ export default function DailyLedger() {
 
     const checkCashBoxes = async () => {
         const boxes = await dbService.getAll("cashBoxes") as CashBox[];
-        setHasCashBox(boxes.length > 0);
+        setCashBoxes(boxes);
+        const assignedBox = currentUser?.assignedBoxId ? boxes.find(b => b.id === currentUser.assignedBoxId) : null;
+        if (assignedBox) {
+            setSelectedBoxId(assignedBox.id || "");
+        } else {
+            const activeBox = boxes.find(b => b.isActive) || boxes[0];
+            if (activeBox) {
+                setSelectedBoxId(activeBox.id || "");
+            }
+        }
     };
 
     const addNewRow = () => {
@@ -64,8 +75,8 @@ export default function DailyLedger() {
         }
 
         const needsCashBox = validRows.some(r => r.isPaid);
-        if (needsCashBox && !hasCashBox) {
-            alert("يوجد فواتير نقدية مدفوعة، يرجى إنشاء صندوق نقدي أولاً من شاشة الخزينة");
+        if (needsCashBox && !selectedBoxId) {
+            alert("يوجد قيود نقدية مدفوعة، يرجى تحديد صندوق مالي");
             return;
         }
 
@@ -98,6 +109,7 @@ export default function DailyLedger() {
                 const invoiceContent: Invoice = {
                     type: row.type,
                     partnerId,
+                    boxId: row.isPaid ? selectedBoxId : undefined,
                     partnerName: row.partnerName.trim(),
                     items: [{
                         productId: "ledger_entry_item",
@@ -134,19 +146,32 @@ export default function DailyLedger() {
 
     return (
         <div className="space-y-4">
-            <div className="flex justify-between items-center mb-4">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
                 <div>
                     <h2 className="text-2xl font-black text-slate-800">دفتر اليومية</h2>
                     <p className="text-slate-500 text-sm">تسجيل سريع لعدة قيود محاسبية</p>
                 </div>
-                <button
-                    onClick={handleSaveAll}
-                    disabled={isSaving}
-                    className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all flex items-center gap-2"
-                >
-                    <Save size={18} />
-                    حفظ الكل
-                </button>
+                <div className="flex items-center gap-3 w-full md:w-auto">
+                    <select
+                        className="bg-white border border-slate-200 rounded-xl px-4 py-2.5 font-bold text-sm min-w-[200px] disabled:opacity-50"
+                        value={selectedBoxId}
+                        onChange={e => setSelectedBoxId(e.target.value)}
+                        disabled={!!currentUser?.assignedBoxId && currentUser.role !== 'SUPER_ADMIN' && currentUser.role !== 'ADMIN'}
+                    >
+                        <option value="">-- اختر الصندوق للقيود النقدية --</option>
+                        {cashBoxes.filter(b => b.isActive).map(b => (
+                            <option key={b.id} value={b.id}>{b.name}</option>
+                        ))}
+                    </select>
+                    <button
+                        onClick={handleSaveAll}
+                        disabled={isSaving}
+                        className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-bold hover:bg-blue-700 shadow-lg shadow-blue-200 transition-all flex items-center gap-2 whitespace-nowrap"
+                    >
+                        <Save size={18} />
+                        حفظ الكل
+                    </button>
+                </div>
             </div>
 
             <div className="space-y-3 pb-6 -mx-4 px-4 md:mx-0 md:px-0">

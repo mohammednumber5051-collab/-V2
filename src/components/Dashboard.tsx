@@ -1,3 +1,4 @@
+import { syncEngine } from "../services/syncEngine";
 import { useEffect, useState } from "react";
 import { 
     TrendingUp, 
@@ -13,12 +14,13 @@ import {
     ShieldCheck, 
     ShoppingCart,
     User,
-    Sparkles
+    Sparkles,
+    FileText
 } from "lucide-react";
 import { dbService } from "../services/db";
 import { motion } from "motion/react";
 import { cn, hasPermission } from "../lib/utils";
-import { AppUser } from "../types";
+import { AppUser, CashBox } from "../types";
 
 export default function Dashboard({ onNavigate, currentUser }: { onNavigate?: (page: any) => void, currentUser?: AppUser | null }) {
     const fallbackName = "المستخدم"; 
@@ -59,36 +61,54 @@ export default function Dashboard({ onNavigate, currentUser }: { onNavigate?: (p
     });
 
     useEffect(() => {
-        const fetchData = async () => {
+        let isMounted = true;
+        const loadDashStats = async () => {
             try {
-                const dashCache = await dbService.getAll("dashboard_cache") as any[];
-                const cache = (dashCache || []).find(d => d.id === 'global') || { 
-                    totalCashBalance: 0,
-                    lowStockCount: 0,
-                    repairQueueCount: 0,
-                    specialOrdersReadyCount: 0,
-                    activeWarrantiesCount: 0
-                };
+                const dashCache = await dbService.getAll("dashboard_cache");
+                const globalCache = dashCache.find(c => c.id === 'global') || {};
+                
+                // Fetch cash boxes directly for accurate live total
+                const cashBoxes = await dbService.getAll("cashBoxes") as CashBox[];
+                
+                const hasViewBalancePermission = hasPermission(currentUser, 'view_cash_balance');
+                const userAssignedBoxId = currentUser?.assignedBoxId;
 
-                setStats({
-                    balance: cache.totalCashBalance || 0,
-                    lowStock: cache.lowStockCount || 0,
-                    repairQueueCount: cache.repairQueueCount || 0,
-                    specialOrdersReadyCount: cache.specialOrdersReadyCount || 0,
-                    activeWarrantiesCount: cache.activeWarrantiesCount || 0,
-                });
+                let finalBalance = 0;
+                if (hasViewBalancePermission) {
+                    if (userAssignedBoxId) {
+                        const assignedBox = cashBoxes.find(b => b.id === userAssignedBoxId);
+                        finalBalance = assignedBox ? (Number(assignedBox.balance) || 0) : 0;
+                    } else {
+                        finalBalance = cashBoxes
+                            .filter(b => b.recordStatus !== 'deleted' && b.isActive !== false)
+                            .reduce((sum, b) => sum + (Number(b.balance) || 0), 0);
+                    }
+                }
+
+                if (isMounted) {
+                    setStats({
+                        balance: finalBalance,
+                        lowStock: globalCache.lowStockCount || 0,
+                        repairQueueCount: globalCache.repairQueueCount || 0,
+                        specialOrdersReadyCount: globalCache.specialOrdersReadyCount || 0,
+                        activeWarrantiesCount: globalCache.activeWarrantiesCount || 0,
+                    });
+                }
             } catch (err) {
-                console.error("Dashboard data fetch error:", err);
+                console.error("Failed to load dashboard stats", err);
             }
         };
-        fetchData();
-    }, []);
+        loadDashStats();
+        return () => { isMounted = false; };
+    }, [currentUser]);
 
     const mainActions = [
         { id: 'invoices', title: 'المبيعات', icon: ShoppingCart, color: 'bg-emerald-500', desc: 'إصدار فواتير بيع جديدة' },
         { id: 'partners', title: 'العملاء', icon: User, color: 'bg-blue-500', desc: 'إدارة حسابات الزبائن' },
         { id: 'inventory', title: 'الأصناف', icon: Package, color: 'bg-indigo-500', desc: 'المخزون والمنتجات' },
-        { id: 'transactions', title: 'سندات صرف وقبض', icon: Wallet, color: 'bg-amber-500', desc: 'الحركات المالية والصندوق' },
+        { id: 'vouchers', title: 'سندات صرف وقبض', icon: Wallet, color: 'bg-amber-500', desc: 'سندات القبض والصرف المالية' },
+        { id: 'quick_entry', title: 'الإدخال السريع', icon: Zap, color: 'bg-cyan-500', desc: 'تسجيل الحركات المالية السريعة' },
+        { id: 'quick_entries_history', title: 'سجل الإدخال السريع', icon: FileText, color: 'bg-blue-600', desc: 'عرض وتعديل العمليات السريعة' },
         { id: 'reports', title: 'التقارير', icon: TrendingUp, color: 'bg-purple-500', desc: 'الأداء المالي والنمو' },
         { id: 'settings', title: 'الإعدادات', icon: Wrench, color: 'bg-slate-600', desc: 'تهيئة النظام والمستخدمين' },
     ].filter(action => hasPermission(currentUser, action.id));
@@ -111,14 +131,23 @@ export default function Dashboard({ onNavigate, currentUser }: { onNavigate?: (p
             <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                onClick={() => onNavigate?.('transactions')}
+                onClick={() => {
+                    localStorage.setItem("transactions_active_tab", "boxes");
+                    onNavigate?.('transactions');
+                }}
                 className="bg-slate-900 dark:bg-[#131b2e] rounded-3xl p-5 text-white shadow-xl relative overflow-hidden cursor-pointer active:scale-95 transition-all"
             >
                 <div className="relative z-10 flex justify-between items-end">
                     <div className="space-y-1">
                         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">الرصيد النقدي المتوفر</span>
                         <div className="text-3xl font-black font-mono">
-                            {(stats.balance || 0).toLocaleString()} <span className="text-xs text-slate-400">YER</span>
+                            {hasPermission(currentUser, 'view_cash_balance') ? (
+                                <>
+                                    {(stats.balance || 0).toLocaleString()} <span className="text-xs text-slate-400">YER</span>
+                                </>
+                            ) : (
+                                "****"
+                            )}
                         </div>
                     </div>
                     <div className="bg-white/10 p-2 rounded-xl">

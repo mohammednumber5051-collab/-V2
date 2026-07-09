@@ -20,7 +20,8 @@ import {
     FileText,
     Store,
     Clock,
-    Cloud
+    Cloud,
+    Info
 } from "lucide-react";
 import { dbService } from "../services/db";
 import { migrationService } from "../services/migration";
@@ -28,7 +29,7 @@ import { BackupRecord } from "../types";
 import { cn } from "../lib/utils";
 import StoreSettingsForm from "./StoreSettingsForm";
 
-type SettingsTab = 'store' | 'system';
+type SettingsTab = 'store' | 'system' | 'about';
 
 export default function EnterpriseSettings() {
     const [backups, setBackups] = useState<BackupRecord[]>([]);
@@ -37,6 +38,10 @@ export default function EnterpriseSettings() {
     const [isBackingUp, setIsBackingUp] = useState(false);
     const [isRestoring, setIsRestoring] = useState(false);
     const [isMigrating, setIsMigrating] = useState(false);
+    const [isRecalculating, setIsRecalculating] = useState(false);
+    const [showRecalculateConfirm, setShowRecalculateConfirm] = useState(false);
+    const [isResetting, setIsResetting] = useState(false);
+    const [showResetConfirm, setShowResetConfirm] = useState(false);
     const [migrationNeeded, setMigrationNeeded] = useState(false);
     const [restoreProgress, setRestoreProgress] = useState("");
     const [activeMainTab, setActiveMainTab] = useState<SettingsTab>('store');
@@ -143,7 +148,7 @@ export default function EnterpriseSettings() {
             URL.revokeObjectURL(url);
 
             // Log this action to the audit trails
-            await dbService.logAudit('EXPORT', 'System', 'BACKUP', `تم تصدير نسخة احتياطية كاملة وتنزيلها كملف محلي (${(blob.size / 1024).toFixed(1)} KB)`);
+            await dbService.logAudit('EXPORT', 'System', 'BACKUP', `تم تصدير نسخة احتياطية كاملة وتنزيلها كملف محلي (${(blob.size / 1024).toFixed(1)} KB)`, null, null, null);
 
             // Save the logs into Firestore and refresh local list
             const currentUserStr = localStorage.getItem("app_user");
@@ -216,6 +221,35 @@ export default function EnterpriseSettings() {
         fileInputRef.current?.click();
     };
 
+    const handleRecalculate = async () => {
+        setIsRecalculating(true);
+        try {
+            await dbService.recalculateFinancials();
+            alert("تمت إعادة حساب الأرصدة والتقارير بنجاح!");
+            setShowRecalculateConfirm(false);
+        } catch (e: any) {
+            console.error("Recalculate error:", e);
+            alert(e.message || "فشلت عملية إعادة الحساب.");
+        } finally {
+            setIsRecalculating(false);
+        }
+    };
+
+    const handleResetFinancials = async () => {
+        setIsResetting(true);
+        try {
+            await dbService.resetAllFinancialData();
+            alert("تمت تهيئة ومسح جميع بيانات التطبيق وقاعدة البيانات بنجاح (بما في ذلك المستخدمين والصناديق)! سيتم إعادة توجيهك لإعداد النظام من جديد.");
+            setShowResetConfirm(false);
+            window.location.reload();
+        } catch (e: any) {
+            console.error("Reset error:", e);
+            alert(e.message || "فشلت عملية التهيئة.");
+        } finally {
+            setIsResetting(false);
+        }
+    };
+
     return (
         <div className="space-y-6 pb-20 max-w-5xl mx-auto">
             <div className="bg-white dark:bg-[#131b2e] p-3.5 rounded-2xl border border-slate-100 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors">
@@ -254,12 +288,24 @@ export default function EnterpriseSettings() {
                         <Shield size={14} />
                         النظام والأمان والمزامنة
                     </button>
+                    <button 
+                        onClick={() => setActiveMainTab('about')}
+                        className={cn(
+                            "flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer",
+                            activeMainTab === 'about' 
+                                ? "bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-sm" 
+                                : "text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
+                        )}
+                    >
+                        <Info size={14} />
+                        حول النظام
+                    </button>
                 </div>
             </div>
 
             {activeMainTab === 'store' ? (
                 <StoreSettingsForm />
-            ) : (
+            ) : activeMainTab === 'system' ? (
                 <div className="space-y-6 animate-fade-up">
                     {/* Restoring progress overlay */}
                     {isRestoring && (
@@ -477,7 +523,116 @@ export default function EnterpriseSettings() {
                         </div>
                     </div>
                 </div>
+            ) : (
+                <div className="max-w-2xl mx-auto mt-10 animate-fade-up">
+                    <div className="bg-white dark:bg-[#131b2e] border border-slate-200 dark:border-slate-800 rounded-3xl p-10 text-center relative overflow-hidden shadow-sm">
+                        <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 to-indigo-600"></div>
+                        <div className="w-20 h-20 bg-blue-50 dark:bg-blue-500/10 rounded-3xl flex items-center justify-center mx-auto mb-6 text-blue-600 dark:text-blue-400 rotate-3">
+                            <Store size={40} />
+                        </div>
+                        <h2 className="text-2xl font-black text-slate-900 dark:text-white mb-2">ASSAR Optical Accounting</h2>
+                        <div className="inline-block bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-3 py-1 rounded-full text-[10px] font-bold font-mono mb-8">
+                            Version 1.0
+                        </div>
+                        
+                        <div className="border-t border-slate-100 dark:border-slate-800 pt-8 mt-4">
+                            <p className="text-xs text-slate-400 font-medium mb-1 uppercase tracking-widest">Designed & Developed By</p>
+                            <p className="text-lg font-black text-slate-800 dark:text-slate-200 mb-2">Mohammed Assubaihi</p>
+                            <p className="text-sm font-mono text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/50 py-2 px-4 rounded-xl inline-block mb-4">
+                                Mobile: 779391682
+                            </p>
+                        </div>
+                        
+                        <div className="border-t border-slate-100 dark:border-slate-800 pt-8 mt-4 relative space-y-4">
+                            {showRecalculateConfirm ? (
+                                <div className="bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/30 p-4 rounded-xl text-right">
+                                    <h4 className="text-rose-700 dark:text-rose-400 font-bold mb-2 flex items-center gap-2">
+                                        <AlertTriangle size={18} />
+                                        تأكيد إعادة الحساب
+                                    </h4>
+                                    <p className="text-sm text-rose-600 dark:text-rose-300 mb-4">
+                                        هل أنت متأكد من إعادة حساب جميع الأرصدة والتقارير؟ سيتم مراجعة كافة الفواتير والعمليات المالية وإعادة ضبط جميع أرصدة الصناديق والعملاء والموردين.
+                                    </p>
+                                    <div className="flex gap-2 justify-end">
+                                        <button 
+                                            onClick={() => setShowRecalculateConfirm(false)}
+                                            className="px-4 py-2 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-700"
+                                            disabled={isRecalculating}
+                                        >
+                                            إلغاء
+                                        </button>
+                                        <button 
+                                            onClick={handleRecalculate}
+                                            className="px-4 py-2 bg-rose-600 text-white rounded-lg text-sm font-bold hover:bg-rose-700 disabled:opacity-50 flex items-center gap-2"
+                                            disabled={isRecalculating}
+                                        >
+                                            {isRecalculating ? <RefreshCw className="animate-spin" size={16} /> : null}
+                                            نعم، ابدأ إعادة الحساب
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div>
+                                    <button
+                                        onClick={() => setShowRecalculateConfirm(true)}
+                                        className="px-6 py-3 bg-rose-50 dark:bg-rose-500/10 text-rose-600 font-bold rounded-xl hover:bg-rose-100 dark:hover:bg-rose-500/20 transition-all text-sm w-full flex items-center justify-center gap-2"
+                                    >
+                                        <RefreshCw size={18} />
+                                        إصلاح الأخطاء المحاسبية وإعادة ضبط الأرصدة ⚠️
+                                    </button>
+                                    <p className="text-xs text-slate-500 mt-3 font-medium">استخدم هذا الزر فقط في حالة وجود خلل في الأرصدة (كالرصيد السالب غير المبرر). سيقوم النظام بمراجعة كافة الفواتير والعمليات وإعادة حساب جميع الأرصدة.</p>
+                                </div>
+                            )}
+
+                            {showResetConfirm ? (
+                                <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 p-4 rounded-xl text-right">
+                                    <h4 className="text-red-700 dark:text-red-400 font-black mb-2 flex items-center gap-2">
+                                        <Trash2 size={18} />
+                                        تأكيد تهيئة وحذف جميع بيانات التطبيق وقاعدة البيانات بالكامل ‼️
+                                    </h4>
+                                    <p className="text-sm text-red-600 dark:text-red-300 mb-4 font-bold">
+                                        هذا الإجراء خطير جداً ولا يمكن التراجع عنه! سيتم حذف ومسح كافة الفواتير، السندات، العمليات، القيود اليومية، المنتجات، العملاء، الموردين، الصناديق، وحسابات المستخدمين بالكامل. سيبدأ التطبيق وقاعدة البيانات من الصفر تماماً كأنه تثبيت جديد.
+                                    </p>
+                                    <div className="flex gap-2 justify-end">
+                                        <button 
+                                            onClick={() => setShowResetConfirm(false)}
+                                            className="px-4 py-2 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-700"
+                                            disabled={isResetting}
+                                        >
+                                            تراجع
+                                        </button>
+                                        <button 
+                                            onClick={handleResetFinancials}
+                                            className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-black hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
+                                            disabled={isResetting}
+                                        >
+                                            {isResetting ? <RefreshCw className="animate-spin" size={16} /> : null}
+                                            نعم، احذف كافة البيانات وابدأ من الصفر
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div>
+                                    <button
+                                        onClick={() => setShowResetConfirm(true)}
+                                        className="px-6 py-3 bg-red-50 dark:bg-red-500/10 text-red-600 font-black rounded-xl hover:bg-red-100 dark:hover:bg-red-500/20 transition-all text-sm w-full flex items-center justify-center gap-2"
+                                    >
+                                        <Trash2 size={18} />
+                                        تهيئة كامل التطبيق وقاعدة البيانات (البدء من الصفر كلياً) ‼️
+                                    </button>
+                                    <p className="text-xs text-red-400/80 mt-3 font-medium">سيقوم هذا الخيار بمسح كامل قاعدة البيانات وحذف جميع المنتجات، الصناديق، المستخدمين، العملاء، الموردين، والفواتير للبدء من جديد تماماً.</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
             )}
+            
+            {/* Enterprise Settings Footer */}
+            <div className="mt-16 text-center text-[10px] text-slate-400 dark:text-slate-500 font-medium pb-8">
+                <div>Designed & Developed By Mohammed Assubaihi</div>
+                <div className="font-mono mt-1">Mobile: 779391682</div>
+            </div>
         </div>
     );
 }

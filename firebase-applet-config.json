@@ -1,10 +1,10 @@
 {
-  "projectId": "wide-sanctum-stpfc",
-  "appId": "1:535976330546:web:3fef059abe275d1712c32b",
-  "apiKey": "AIzaSyCs-oy1oTBnMzNPDQjV3ZGXx3hOl-xDerM",
-  "authDomain": "wide-sanctum-stpfc.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-b53b97d8-0528-4f2f-802c-5c524b9dcf8c",
-  "storageBucket": "wide-sanctum-stpfc.firebasestorage.app",
-  "messagingSenderId": "535976330546",
+  "apiKey": "AIzaSyAvKcYA74B7ESUD_YqJrrIELAZfk78wn6w",
+  "authDomain": "assar-optical-erp.firebaseapp.com",
+  "projectId": "assar-optical-erp",
+  "storageBucket": "assar-optical-erp.firebasestorage.app",
+  "messagingSenderId": "938115004382",
+  "appId": "1:938115004382:web:d84f7183b7f10074aca6df",
+  "firestoreDatabaseId": "(default)",
   "measurementId": ""
 }

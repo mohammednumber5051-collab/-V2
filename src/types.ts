@@ -20,7 +20,7 @@ export interface AggregationImpact {
     transactionCount?: number;
 }
 
-export type EntityType = 'sale' | 'purchase';
+export type EntityType = 'sale' | 'purchase' | 'sale_return' | 'purchase_return';
 export type TransactionType = 'قبض' | 'صرف';
 export type InvoiceStatus = 'مدفوع' | 'جزئي' | 'آجل';
 export type Currency = 'YER' | 'SAR' | 'USD';
@@ -58,6 +58,7 @@ export interface AppUser {
     permissions: string[]; // List of granular permissions or pages
     sessionVersion?: number; // Used to invalidate sessions
     sessionSecret?: string; // Additional integrity check
+    assignedBoxId?: string; // Enforced CashBox for this user
     lastLoginAt?: string;
     lastLogoutAt?: string;
     lastActivityAt?: string;
@@ -90,8 +91,16 @@ export interface AuditLog {
     description: string;
     oldValue?: any;
     newValue?: any;
+    
+    // Detailed audit fields
+    originalCreatedAt?: string;
+    originalCreatedBy?: string;
+    cashBoxBalanceBefore?: number;
+    cashBoxBalanceAfter?: number;
+    
     deviceInfo?: string;
     createdAt: string;
+    updatedAt?: string;
 }
 
 export interface BackupRecord {
@@ -160,6 +169,7 @@ export interface Customer {
     balance: number;
     opticalProfile?: OpticalCustomerProfileData; // Added for optical-friendly patient notes
     recordStatus?: RecordStatus;
+    createdAt?: string;
     updatedAt: string;
 }
 
@@ -170,7 +180,21 @@ export interface Supplier {
     address: string;
     balance: number;
     recordStatus?: RecordStatus;
+    createdAt?: string;
     updatedAt: string;
+}
+
+export interface OpticalPrescriptionLens {
+    distance?: { sph?: string; cyl?: string; ax?: string };
+    near?: { sph?: string; cyl?: string; ax?: string };
+}
+
+export interface OpticalPrescription {
+    rightEye?: OpticalPrescriptionLens;
+    leftEye?: OpticalPrescriptionLens;
+    ipd?: string;
+    lensType?: string;
+    frameType?: string;
 }
 
 export interface InvoiceItem {
@@ -184,6 +208,7 @@ export interface InvoiceItem {
 
 export interface Invoice {
     id?: string;
+    invoiceNumber?: string;
     type: EntityType;
     partnerId: string;
     partnerName: string;
@@ -203,6 +228,10 @@ export interface Invoice {
     dueDate?: string | null;
     attachmentUrl?: string;
     autoCreatePartner?: boolean;
+    opticalPrescription?: OpticalPrescription;
+    isReturn?: boolean;
+    originalInvoiceId?: string;
+    originalInvoiceNumber?: string;
     recordStatus?: RecordStatus;
     createdAt: string;
     updatedAt?: string;
@@ -212,6 +241,7 @@ export interface CashBox {
     id?: string;
     name: string;
     balance: number;
+    initialBalance?: number;
     currency: Currency;
     userId: string; // Linked user
     userName: string;
@@ -300,6 +330,25 @@ export interface SpecialOrder {
     updatedAt: string;
 }
 
+export interface FinancialMovement {
+    id: string;
+    originalId: string;
+    source: 'invoice' | 'voucher' | 'quickEntry' | 'transaction';
+    recordType: string;
+    paymentType: string;
+    partnerName: string;
+    totalAmount: number;
+    discount: number;
+    paidAmount: number;
+    remainingAmount: number;
+    boxName: string;
+    boxChanges?: Record<string, number>;
+    createdBy: string;
+    createdAt: string;
+    dateObj: Date;
+    originalRecord: any;
+}
+
 export type QuickEntryType = 'manual_sale' | 'manual_purchase' | 'receipt' | 'payment' | 'adjustment';
 
 export interface QuickFinancialEntry {
@@ -320,7 +369,10 @@ export interface QuickFinancialEntry {
     notes: string;
     currency: Currency;
     referenceNumber: string;
+    voucherNumber?: number; // New auto-generated field
     printCount: number;
+    opticalPrescription?: OpticalPrescription;
+    autoCreatePartner?: boolean;
     createdAt: string;
     updatedAt: string;
     createdBy: string;
@@ -341,6 +393,26 @@ export interface DailyFinancialSummary {
     payablesTotal: number;
     transactionCount: number;
     updatedAt: string;
+}
+
+export interface Voucher {
+    id?: string;
+    voucherNumber: number;
+    referenceNumber?: string;
+    type: 'receipt' | 'payment';
+    partnerId: string;
+    partnerName: string;
+    partnerType?: 'customer' | 'supplier' | 'none';
+    amount: number;
+    currency: Currency;
+    boxId: string;
+    boxName: string;
+    notes?: string;
+    createdBy?: string;
+    updatedBy?: string;
+    createdAt: string;
+    updatedAt: string;
+    recordStatus?: RecordStatus;
 }
 
 export interface MonthlyFinancialSummary {

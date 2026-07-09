@@ -1,0 +1,933 @@
+[
+  {
+    "customerId": "3eNezD89bSKCQ6R6ZN7k",
+    "customerName": "عمار حمود هيج-4045",
+    "storedBalance": 6000,
+    "invoices": [
+      {
+        "id": "mng8ObwOPv1BBfO6uku6",
+        "invoiceNumber": "11",
+        "total": 6000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "آجل",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "sxOfHDKcrPDUYXMTANv4",
+        "type": "قبض",
+        "amount": 6000,
+        "sourceType": "sales_invoice",
+        "sourceId": "mng8ObwOPv1BBfO6uku6",
+        "debit": 6000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - mng8ObwOPv1BBfO6uku6"
+      }
+    ]
+  },
+  {
+    "customerId": "7njdVgDlut1977skXEWt",
+    "customerName": "ام / كامل تاج الدين-0424",
+    "storedBalance": 0,
+    "invoices": [
+      {
+        "id": "arIi21XnjYR4fnzDF8nC",
+        "invoiceNumber": "52",
+        "total": 7000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "مدفوع",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "EnYGgsv8uc33vhJk5eZp",
+        "type": "قبض",
+        "amount": 7000,
+        "sourceType": "sales_invoice",
+        "sourceId": "arIi21XnjYR4fnzDF8nC",
+        "debit": 7000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - arIi21XnjYR4fnzDF8nC"
+      },
+      {
+        "id": "Hb6Uwj2APgtr8e6qFcby",
+        "type": "قبض",
+        "amount": 7000,
+        "sourceType": "manual_receipt",
+        "sourceId": "arIi21XnjYR4fnzDF8nC",
+        "debit": 0,
+        "credit": 7000,
+        "description": "دفعة من فاتورة مبيعات - arIi21XnjYR4fnzDF8nC"
+      }
+    ]
+  },
+  {
+    "customerId": "FHGKAMhkWGA9Y8ljfR6o",
+    "customerName": "عنتر شوعي محمد",
+    "storedBalance": -30000,
+    "invoices": [],
+    "transactions": [
+      {
+        "id": "Y8jd88Mem530oORzcflS",
+        "type": "قبض",
+        "amount": 15000,
+        "sourceType": "quick_financial_entry",
+        "sourceId": "hY4IxPaBZJ6itThbDanH",
+        "debit": 15000,
+        "credit": 0,
+        "description": "إثبات manual_sale"
+      },
+      {
+        "id": "yI2YuBiAvtpAOswmk7Dq",
+        "type": "قبض",
+        "amount": 15000,
+        "sourceType": "manual_receipt",
+        "sourceId": "hY4IxPaBZJ6itThbDanH",
+        "debit": 0,
+        "credit": 15000,
+        "description": "حركة نقدية - manual_sale"
+      }
+    ]
+  },
+  {
+    "customerId": "FcETDOusAdEKSTgdFsqr",
+    "customerName": "علي عصار.421",
+    "storedBalance": 0,
+    "invoices": [
+      {
+        "id": "ljpqGakxWdTt9ZvFd3RC",
+        "invoiceNumber": "27",
+        "total": 0,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "آجل",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "O2192PgM5UKedru1hJUd",
+        "type": "قبض",
+        "amount": 0,
+        "sourceType": "sales_invoice",
+        "sourceId": "ljpqGakxWdTt9ZvFd3RC",
+        "debit": 0,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - ljpqGakxWdTt9ZvFd3RC"
+      }
+    ]
+  },
+  {
+    "customerId": "GsFxReVqu3OGQrLMsZ97",
+    "customerName": "حوريه اتعابد..419",
+    "storedBalance": 0,
+    "invoices": [
+      {
+        "id": "PBcWKGuPPN1S92jUaVWP",
+        "invoiceNumber": "25",
+        "total": 5000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "مدفوع",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "srJReVbzIa16389MvEFo",
+        "type": "قبض",
+        "amount": 5000,
+        "sourceType": "manual_receipt",
+        "sourceId": "PBcWKGuPPN1S92jUaVWP",
+        "debit": 0,
+        "credit": 5000,
+        "description": "دفعة من فاتورة مبيعات - PBcWKGuPPN1S92jUaVWP"
+      },
+      {
+        "id": "uSF34AlIohfZ9qohd0YT",
+        "type": "قبض",
+        "amount": 5000,
+        "sourceType": "sales_invoice",
+        "sourceId": "PBcWKGuPPN1S92jUaVWP",
+        "debit": 5000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - PBcWKGuPPN1S92jUaVWP"
+      }
+    ]
+  },
+  {
+    "customerId": "H8jzXOfBJ2pTAyxFtTjV",
+    "customerName": "اشراق المحبشي-0404",
+    "storedBalance": 0,
+    "invoices": [
+      {
+        "id": "Wdt3CSqmBjihEmAYxe8G",
+        "invoiceNumber": "10",
+        "total": 10000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "مدفوع",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": []
+  },
+  {
+    "customerId": "IYxQoysMW1hdwWXj6FQf",
+    "customerName": "خديجه احمد محمد-0409",
+    "storedBalance": 0,
+    "invoices": [
+      {
+        "id": "gOfN6XTNFZEzAQlGNlan",
+        "invoiceNumber": "15",
+        "total": 10000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "مدفوع",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "P5u7ravaauNRgwdy2Cox",
+        "type": "قبض",
+        "amount": 10000,
+        "sourceType": "manual_receipt",
+        "sourceId": "gOfN6XTNFZEzAQlGNlan",
+        "debit": 0,
+        "credit": 10000,
+        "description": "دفعة من فاتورة مبيعات - gOfN6XTNFZEzAQlGNlan"
+      },
+      {
+        "id": "gQvtUO71fsh4BOzWvcrW",
+        "type": "قبض",
+        "amount": 10000,
+        "sourceType": "sales_invoice",
+        "sourceId": "gOfN6XTNFZEzAQlGNlan",
+        "debit": 10000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - gOfN6XTNFZEzAQlGNlan"
+      }
+    ]
+  },
+  {
+    "customerId": "KyW3AH2oXqcbCOjhBDVU",
+    "customerName": "زليخة عيسى ابراهيم-0417",
+    "storedBalance": 0,
+    "invoices": [
+      {
+        "id": "uahvHqgNRSQ7U4qDlKaK",
+        "invoiceNumber": "23",
+        "total": 15000,
+        "paid": 15000,
+        "paymentType": "نقدآ",
+        "status": "مدفوع",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "BpplCVbMwpTohxjCShSq",
+        "type": "قبض",
+        "amount": 10000,
+        "sourceType": "manual_receipt",
+        "sourceId": "uahvHqgNRSQ7U4qDlKaK",
+        "debit": 0,
+        "credit": 10000,
+        "description": "دفعة من فاتورة مبيعات - uahvHqgNRSQ7U4qDlKaK"
+      },
+      {
+        "id": "SIMflsV2bjj6IVZnUnLl",
+        "type": "قبض",
+        "amount": 15000,
+        "sourceType": "sales_invoice",
+        "sourceId": "uahvHqgNRSQ7U4qDlKaK",
+        "debit": 15000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - uahvHqgNRSQ7U4qDlKaK"
+      },
+      {
+        "id": "kH3EpQ8XgCklF1TJUS3o",
+        "type": "قبض",
+        "amount": 5000,
+        "sourceType": "invoice_payment",
+        "sourceId": "uahvHqgNRSQ7U4qDlKaK",
+        "description": "دفعة من الحساب للفاتورة: #23"
+      }
+    ]
+  },
+  {
+    "customerId": "L9kVU5GKUpKDm5LJhRY2",
+    "customerName": "محمد الطواف-0402",
+    "storedBalance": 0,
+    "invoices": [
+      {
+        "id": "j1QaKFKZmxLzuuynSIAj",
+        "invoiceNumber": "8",
+        "total": 10000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "مدفوع",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "S6flICwpeO7q9SOynO32",
+        "type": "قبض",
+        "amount": 10000,
+        "sourceType": "sales_invoice",
+        "sourceId": "j1QaKFKZmxLzuuynSIAj",
+        "debit": 10000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - j1QaKFKZmxLzuuynSIAj"
+      },
+      {
+        "id": "Sjzn84ipbh7yURXEZZ9r",
+        "type": "قبض",
+        "amount": 10000,
+        "sourceType": "manual_receipt",
+        "sourceId": "j1QaKFKZmxLzuuynSIAj",
+        "debit": 0,
+        "credit": 10000,
+        "description": "دفعة من فاتورة مبيعات - j1QaKFKZmxLzuuynSIAj"
+      }
+    ]
+  },
+  {
+    "customerId": "O5M5Aw5bZy5Q6mmf0J8x",
+    "customerName": "ليلى مصلح-0418",
+    "storedBalance": 6000,
+    "invoices": [
+      {
+        "id": "AUbkFTNdjjcj6pVOnE57",
+        "invoiceNumber": "24",
+        "total": 13000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "جزئي",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "05uWWNAFEbRCthjPpCuY",
+        "type": "قبض",
+        "amount": 13000,
+        "sourceType": "sales_invoice",
+        "sourceId": "AUbkFTNdjjcj6pVOnE57",
+        "debit": 13000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - AUbkFTNdjjcj6pVOnE57"
+      },
+      {
+        "id": "j6HaSoAcT75oAjfJpHFm",
+        "type": "قبض",
+        "amount": 7000,
+        "sourceType": "manual_receipt",
+        "sourceId": "AUbkFTNdjjcj6pVOnE57",
+        "debit": 0,
+        "credit": 7000,
+        "description": "دفعة من فاتورة مبيعات - AUbkFTNdjjcj6pVOnE57"
+      }
+    ]
+  },
+  {
+    "customerId": "OqG9RKQcqXnSygthAmpt",
+    "customerName": "فايز القاسمي-0413",
+    "storedBalance": 0,
+    "invoices": [
+      {
+        "id": "Wqimv5VGpyTaWUeLqEkZ",
+        "invoiceNumber": "19",
+        "total": 12000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "مدفوع",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "MrN5aEMLgZj4qoWkZtmW",
+        "type": "قبض",
+        "amount": 12000,
+        "sourceType": "sales_invoice",
+        "sourceId": "Wqimv5VGpyTaWUeLqEkZ",
+        "debit": 12000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - Wqimv5VGpyTaWUeLqEkZ"
+      },
+      {
+        "id": "bxhaLigDn1Q3AKn1c7bq",
+        "type": "قبض",
+        "amount": 12000,
+        "sourceType": "manual_receipt",
+        "sourceId": "Wqimv5VGpyTaWUeLqEkZ",
+        "debit": 0,
+        "credit": 12000,
+        "description": "دفعة من فاتورة مبيعات - Wqimv5VGpyTaWUeLqEkZ"
+      }
+    ]
+  },
+  {
+    "customerId": "QcXma09k3bDadtZYYB4b",
+    "customerName": "امه السلام محمد عبدالله-0414",
+    "storedBalance": 9000,
+    "invoices": [
+      {
+        "id": "jhjYnUGVXliX5wlKRuX4",
+        "invoiceNumber": "20",
+        "total": 15000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "جزئي",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "gl1xd0KaVP6KoNL3i2aV",
+        "type": "قبض",
+        "amount": 15000,
+        "sourceType": "sales_invoice",
+        "sourceId": "jhjYnUGVXliX5wlKRuX4",
+        "debit": 15000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - jhjYnUGVXliX5wlKRuX4"
+      },
+      {
+        "id": "i5mNHcPdMDZj6mOBDIUU",
+        "type": "قبض",
+        "amount": 6000,
+        "sourceType": "manual_receipt",
+        "sourceId": "jhjYnUGVXliX5wlKRuX4",
+        "debit": 0,
+        "credit": 6000,
+        "description": "دفعة من فاتورة مبيعات - jhjYnUGVXliX5wlKRuX4"
+      }
+    ]
+  },
+  {
+    "customerId": "SBEuHr7WYXPDmStrPu9i",
+    "customerName": "وديع احمد حجري-0415",
+    "storedBalance": 0,
+    "invoices": [
+      {
+        "id": "MVejgwoQnFztviDwXOvu",
+        "invoiceNumber": "21",
+        "total": 15000,
+        "paid": 10000,
+        "paymentType": "نقدآ",
+        "status": "مدفوع",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "0USn1OIGCJiFfDIr1xHs",
+        "type": "قبض",
+        "amount": 10000,
+        "sourceType": "invoice_payment",
+        "sourceId": "MVejgwoQnFztviDwXOvu",
+        "description": "دفعة من الحساب للفاتورة: #21"
+      },
+      {
+        "id": "AsLR2DW3O5FzPqmk0EjO",
+        "type": "قبض",
+        "amount": 15000,
+        "sourceType": "sales_invoice",
+        "sourceId": "MVejgwoQnFztviDwXOvu",
+        "debit": 15000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - MVejgwoQnFztviDwXOvu"
+      },
+      {
+        "id": "vfgDBL3C1BU80B49ipXr",
+        "type": "قبض",
+        "amount": 5000,
+        "sourceType": "manual_receipt",
+        "sourceId": "MVejgwoQnFztviDwXOvu",
+        "debit": 0,
+        "credit": 5000,
+        "description": "دفعة من فاتورة مبيعات - MVejgwoQnFztviDwXOvu"
+      }
+    ]
+  },
+  {
+    "customerId": "SGdgLuOqM8nmeBto929S",
+    "customerName": "علي ابراهيم عبدالله-0411",
+    "storedBalance": 0,
+    "invoices": [
+      {
+        "id": "KkzlwBU1jP9XjTYVlsil",
+        "invoiceNumber": "17",
+        "total": 16000,
+        "paid": 6000,
+        "paymentType": "نقدآ",
+        "status": "مدفوع",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "BAc3EbxzJ7VhbbCtUtpd",
+        "type": "قبض",
+        "amount": 10000,
+        "sourceType": "manual_receipt",
+        "sourceId": "KkzlwBU1jP9XjTYVlsil",
+        "debit": 0,
+        "credit": 10000,
+        "description": "دفعة من فاتورة مبيعات - KkzlwBU1jP9XjTYVlsil"
+      },
+      {
+        "id": "sSRNgSvsZExBrQTdpk4s",
+        "type": "قبض",
+        "amount": 16000,
+        "sourceType": "sales_invoice",
+        "sourceId": "KkzlwBU1jP9XjTYVlsil",
+        "debit": 16000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - KkzlwBU1jP9XjTYVlsil"
+      },
+      {
+        "id": "wVjWXxR0trrXCEAOX6fc",
+        "type": "قبض",
+        "amount": 6000,
+        "sourceType": "invoice_payment",
+        "sourceId": "KkzlwBU1jP9XjTYVlsil",
+        "description": "دفعة من الحساب للفاتورة: #17"
+      }
+    ]
+  },
+  {
+    "customerId": "W1eElZpTMU7bPL46R85l",
+    "customerName": "محمد عبدالوهاب هيج-0412",
+    "storedBalance": 5000,
+    "invoices": [
+      {
+        "id": "NEbBAszTBIE5fTGNfQgO",
+        "invoiceNumber": "18",
+        "total": 15000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "جزئي",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "Fue7YAlNgfJHiUZvmZLP",
+        "type": "قبض",
+        "amount": 10000,
+        "sourceType": "manual_receipt",
+        "sourceId": "NEbBAszTBIE5fTGNfQgO",
+        "debit": 0,
+        "credit": 10000,
+        "description": "دفعة من فاتورة مبيعات - NEbBAszTBIE5fTGNfQgO"
+      },
+      {
+        "id": "vbVkFAX0kvR9EundxJGu",
+        "type": "قبض",
+        "amount": 15000,
+        "sourceType": "sales_invoice",
+        "sourceId": "NEbBAszTBIE5fTGNfQgO",
+        "debit": 15000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - NEbBAszTBIE5fTGNfQgO"
+      }
+    ]
+  },
+  {
+    "customerId": "WXkin9QPoj1qAT4s95yD",
+    "customerName": "زينب علي شريان-0416",
+    "storedBalance": 0,
+    "invoices": [
+      {
+        "id": "U3SjloDBg66UcPEzbQsP",
+        "invoiceNumber": "22",
+        "total": 5000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "مدفوع",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "D2jjESvkrIwtkSgMy3zO",
+        "type": "قبض",
+        "amount": 5000,
+        "sourceType": "sales_invoice",
+        "sourceId": "U3SjloDBg66UcPEzbQsP",
+        "debit": 5000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - U3SjloDBg66UcPEzbQsP"
+      },
+      {
+        "id": "txfQEgGAmKMhrnCLLKPn",
+        "type": "قبض",
+        "amount": 5000,
+        "sourceType": "manual_receipt",
+        "sourceId": "U3SjloDBg66UcPEzbQsP",
+        "debit": 0,
+        "credit": 5000,
+        "description": "دفعة من فاتورة مبيعات - U3SjloDBg66UcPEzbQsP"
+      }
+    ]
+  },
+  {
+    "customerId": "eePbN5wx6n62oH1cRiEV",
+    "customerName": "فاطمه محمد ابكر-     0401 ",
+    "storedBalance": 0,
+    "invoices": [
+      {
+        "id": "Qpjn9VDhkb2WSByg1D3h",
+        "invoiceNumber": "7",
+        "total": 13000,
+        "paid": 8000,
+        "paymentType": "نقدآ",
+        "status": "مدفوع",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "AL7v45m0kNwZeNStk1Qv",
+        "type": "قبض",
+        "amount": 8000,
+        "sourceType": "invoice_payment",
+        "sourceId": "Qpjn9VDhkb2WSByg1D3h",
+        "description": "دفعة من الحساب للفاتورة: #7"
+      },
+      {
+        "id": "IoznftQPgEM8CUJX1ICp",
+        "type": "قبض",
+        "amount": 5000,
+        "sourceType": "manual_receipt",
+        "sourceId": "Qpjn9VDhkb2WSByg1D3h",
+        "debit": 0,
+        "credit": 5000,
+        "description": "دفعة من فاتورة مبيعات - Qpjn9VDhkb2WSByg1D3h"
+      },
+      {
+        "id": "PwoWfPApG9tPkgTQnanB",
+        "type": "قبض",
+        "amount": 13000,
+        "sourceType": "sales_invoice",
+        "sourceId": "Qpjn9VDhkb2WSByg1D3h",
+        "debit": 13000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - Qpjn9VDhkb2WSByg1D3h"
+      }
+    ]
+  },
+  {
+    "customerId": "fTzATR1gQxfPPjR7pmpO",
+    "customerName": "بشرى الهبيط0407",
+    "storedBalance": 24000,
+    "invoices": [
+      {
+        "id": "SBou79sFAk7T2e0UYm15",
+        "invoiceNumber": "13",
+        "total": 12000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "آجل",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "0ekCgmayZUj1SgoIGfxN",
+        "type": "قبض",
+        "amount": 12000,
+        "sourceType": "sales_invoice",
+        "sourceId": "SBou79sFAk7T2e0UYm15",
+        "debit": 12000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - SBou79sFAk7T2e0UYm15"
+      },
+      {
+        "id": "Au3BLRk5MTCJ32ox00YS",
+        "type": "قبض",
+        "amount": 12000,
+        "sourceType": "sales_invoice",
+        "sourceId": "SBou79sFAk7T2e0UYm15",
+        "debit": 12000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - SBou79sFAk7T2e0UYm15"
+      },
+      {
+        "id": "P9czlCMCuC4CiePFPsxQ",
+        "type": "قبض",
+        "amount": 12000,
+        "sourceType": "sales_invoice",
+        "sourceId": "SBou79sFAk7T2e0UYm15",
+        "debit": 12000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - SBou79sFAk7T2e0UYm15"
+      },
+      {
+        "id": "tNKZ3otZ9NIfXHkpKtLZ",
+        "type": "قبض",
+        "amount": 12000,
+        "sourceType": "manual_receipt",
+        "sourceId": "SBou79sFAk7T2e0UYm15",
+        "debit": 0,
+        "credit": 12000,
+        "description": "دفعة من فاتورة مبيعات - SBou79sFAk7T2e0UYm15"
+      }
+    ]
+  },
+  {
+    "customerId": "hUXPEjYJ21ETf1EGlPzj",
+    "customerName": "سليمان عثمان 0403",
+    "storedBalance": 5000,
+    "invoices": [
+      {
+        "id": "d1fbvYhfNjGP6V6YsTmo",
+        "invoiceNumber": "9",
+        "total": 5000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "آجل",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "64Bu3mVBuIqbL6QZa7dE",
+        "type": "قبض",
+        "amount": 5000,
+        "sourceType": "sales_invoice",
+        "sourceId": "d1fbvYhfNjGP6V6YsTmo",
+        "debit": 5000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - d1fbvYhfNjGP6V6YsTmo"
+      },
+      {
+        "id": "jrEEHEWJALpOqRUtQx9j",
+        "type": "قبض",
+        "amount": 0,
+        "sourceType": "sales_invoice",
+        "sourceId": "d1fbvYhfNjGP6V6YsTmo",
+        "debit": 0,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - d1fbvYhfNjGP6V6YsTmo"
+      }
+    ]
+  },
+  {
+    "customerId": "k4YwD4pORWcErbulvk6O",
+    "customerName": "ياسر الشرعبي-4046",
+    "storedBalance": 6000,
+    "invoices": [
+      {
+        "id": "fGGKMEZeTaRqEJe6mJAU",
+        "invoiceNumber": "12",
+        "total": 6000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "آجل",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "16o9uqI6qFHNIimqbkjE",
+        "type": "قبض",
+        "amount": 6000,
+        "sourceType": "sales_invoice",
+        "sourceId": "fGGKMEZeTaRqEJe6mJAU",
+        "debit": 6000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - fGGKMEZeTaRqEJe6mJAU"
+      },
+      {
+        "id": "TxeOoumfeM6vqftZ1fro",
+        "type": "قبض",
+        "amount": 6000,
+        "sourceType": "sales_invoice",
+        "sourceId": "fGGKMEZeTaRqEJe6mJAU",
+        "debit": 6000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - fGGKMEZeTaRqEJe6mJAU"
+      },
+      {
+        "id": "nokJ9SZmNO8HXYeOC3zC",
+        "type": "قبض",
+        "amount": 6000,
+        "sourceType": "manual_receipt",
+        "sourceId": "fGGKMEZeTaRqEJe6mJAU",
+        "debit": 0,
+        "credit": 6000,
+        "description": "دفعة من فاتورة مبيعات - fGGKMEZeTaRqEJe6mJAU"
+      }
+    ]
+  },
+  {
+    "customerId": "mcuw0geKaqMUJKw5v07Y",
+    "customerName": "ريماس وليد جابر-4025",
+    "storedBalance": 6000,
+    "invoices": [
+      {
+        "id": "8hCnLimwSZReoI52vCDv",
+        "invoiceNumber": "53",
+        "total": 13000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "جزئي",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "RVypuwGsOv8tHKV738yZ",
+        "type": "قبض",
+        "amount": 13000,
+        "sourceType": "sales_invoice",
+        "sourceId": "8hCnLimwSZReoI52vCDv",
+        "debit": 13000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - 8hCnLimwSZReoI52vCDv"
+      },
+      {
+        "id": "t8ITiGn7t36G126gSJkW",
+        "type": "قبض",
+        "amount": 7000,
+        "sourceType": "manual_receipt",
+        "sourceId": "8hCnLimwSZReoI52vCDv",
+        "debit": 0,
+        "credit": 7000,
+        "description": "دفعة من فاتورة مبيعات - 8hCnLimwSZReoI52vCDv"
+      }
+    ]
+  },
+  {
+    "customerId": "r4R73AASF5urKGWS1glO",
+    "customerName": "محمد اتشرعبي.420",
+    "storedBalance": 0,
+    "invoices": [
+      {
+        "id": "RgSsZXWjy6ZWYRemBIWl",
+        "invoiceNumber": "26",
+        "total": 5000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "مدفوع",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "is7Z4Ecf5l1EcwYhYMlD",
+        "type": "قبض",
+        "amount": 5000,
+        "sourceType": "sales_invoice",
+        "sourceId": "RgSsZXWjy6ZWYRemBIWl",
+        "debit": 5000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - RgSsZXWjy6ZWYRemBIWl"
+      },
+      {
+        "id": "rcX4o0JyWxTb7FBsywJp",
+        "type": "قبض",
+        "amount": 5000,
+        "sourceType": "manual_receipt",
+        "sourceId": "RgSsZXWjy6ZWYRemBIWl",
+        "debit": 0,
+        "credit": 5000,
+        "description": "دفعة من فاتورة مبيعات - RgSsZXWjy6ZWYRemBIWl"
+      }
+    ]
+  },
+  {
+    "customerId": "tVEPHOSP06dwX6nUAURm",
+    "customerName": "احمد علي الطيب-0410",
+    "storedBalance": 0,
+    "invoices": [
+      {
+        "id": "wwS9Lu5UzSKLHjEWzlkv",
+        "invoiceNumber": "16",
+        "total": 17000,
+        "paid": 10000,
+        "paymentType": "نقدآ",
+        "status": "مدفوع",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "WwK9hMcifWhs3EMWJcqJ",
+        "type": "قبض",
+        "amount": 17000,
+        "sourceType": "sales_invoice",
+        "sourceId": "wwS9Lu5UzSKLHjEWzlkv",
+        "debit": 17000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - wwS9Lu5UzSKLHjEWzlkv"
+      },
+      {
+        "id": "bMEvVdCDfkCbZYLPFjAx",
+        "type": "قبض",
+        "amount": 7000,
+        "sourceType": "manual_receipt",
+        "sourceId": "wwS9Lu5UzSKLHjEWzlkv",
+        "debit": 0,
+        "credit": 7000,
+        "description": "دفعة من فاتورة مبيعات - wwS9Lu5UzSKLHjEWzlkv"
+      },
+      {
+        "id": "zWJDkgQ2nX02A5f4Z5YA",
+        "type": "قبض",
+        "amount": 10000,
+        "sourceType": "invoice_payment",
+        "sourceId": "wwS9Lu5UzSKLHjEWzlkv",
+        "description": "دفعة من الحساب للفاتورة: #16"
+      }
+    ]
+  },
+  {
+    "customerId": "uOe3cbv6iGBdcpzABbmE",
+    "customerName": "امل ابراهيم ناصر-0422",
+    "storedBalance": 10000,
+    "invoices": [
+      {
+        "id": "or3RezdzTdF82XWVfWGk",
+        "invoiceNumber": "36",
+        "total": 15000,
+        "paid": 0,
+        "paymentType": "نقدآ",
+        "status": "جزئي",
+        "lifecycleStatus": "معتمد"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "gruh9RexCFpZ4k41cx7n",
+        "type": "قبض",
+        "amount": 5000,
+        "sourceType": "manual_receipt",
+        "sourceId": "or3RezdzTdF82XWVfWGk",
+        "debit": 0,
+        "credit": 5000,
+        "description": "دفعة من فاتورة مبيعات - or3RezdzTdF82XWVfWGk"
+      },
+      {
+        "id": "rWsQ6dawwVB4ieowy4Na",
+        "type": "قبض",
+        "amount": 15000,
+        "sourceType": "sales_invoice",
+        "sourceId": "or3RezdzTdF82XWVfWGk",
+        "debit": 15000,
+        "credit": 0,
+        "description": "إثبات فاتورة مبيعات - or3RezdzTdF82XWVfWGk"
+      }
+    ]
+  }
+]

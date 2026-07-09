@@ -1,6 +1,6 @@
 import firebaseConfig from "../../firebase-applet-config.json";
 import { FinancialEngine } from "./financialEngine";
-import { AppUser } from "../types";
+import { AppUser, AuditLog } from "../types";
 
 const getLocalColl = (coll: string): any[] => {
     try {
@@ -46,40 +46,16 @@ const getCurrentUser = (): AppUser => {
     };
 };
 
-// Initialize default local storage collections if empty
-const defaultUsers = getLocalColl("users");
-const existsExists = defaultUsers.find(u => u.name === "محمد الصبيحي");
-if (!existsExists) {
-    defaultUsers.push({
-        id: "system-admin-default",
-        name: "محمد الصبيحي",
-        email: "mohammednumber5051@gmail.com",
-        password: "1234",
-        role: "SUPER_ADMIN",
-        permissions: ['*'],
-        recordStatus: 'active',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-    });
-    saveLocalColl("users", defaultUsers);
-}
-
-const defaultBoxes = getLocalColl("cashBoxes");
-if (defaultBoxes.length === 0) {
-    defaultBoxes.push({
-        id: "main-box",
-        name: "الصندوق الرئيسي",
-        balance: 100000,
-        currency: "YER",
-        recordStatus: 'active',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-    });
-    saveLocalColl("cashBoxes", defaultBoxes);
-}
-
 export const localDbService = {
-    async logAudit(action: string, entityType: string, entityId: string, description: string, oldValue?: any, newValue?: any) {
+    async clearLocalData() {
+        Object.keys(localStorage).forEach(key => {
+            if (key.startsWith('fp_db_')) {
+                localStorage.removeItem(key);
+            }
+        });
+        await this.logAudit('SETTINGS_CHANGE', 'System', 'RESET', 'تم مسح جميع البيانات المحلية من localStorage');
+    },
+    async logAudit(action: string, entityType: string, entityId: string, description: string, oldValue?: any, newValue?: any, extraDetails?: Partial<AuditLog>) {
         try {
             const u = getCurrentUser();
             const auditLogs = getLocalColl("auditLogs");
@@ -93,6 +69,7 @@ export const localDbService = {
                 description,
                 oldValue: oldValue || null,
                 newValue: newValue || null,
+                ...extraDetails,
                 deviceInfo: typeof navigator !== 'undefined' ? navigator.userAgent : 'Unknown',
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString()
@@ -160,49 +137,108 @@ export const localDbService = {
         return filtered;
     },
 
-    async add(collectionName: string, data: any, disableAudit: boolean = false) {
+    async add(collectionName: string, data: any, disableAudit: boolean = false, customDescription?: string) {
         const list = getLocalColl(collectionName);
+        const u = getCurrentUser();
+        const targetId = data.id || generateId();
+        const existingIdx = list.findIndex((item: any) => item.id === targetId);
         const newDoc = {
-            id: data.id || generateId(),
+            id: targetId,
             ...data,
+            _isOfflineCreated: true, // Mark as offline created so sync engine knows to upload it instead of assuming it was deleted remotely
             recordStatus: 'active',
             updatedAt: new Date().toISOString(),
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            createdBy: u?.id || "SYS",
+            createdByName: u?.name || "System",
+            createdByUsername: u?.username || "system",
+            updatedBy: u?.id || "SYS",
+            updatedByName: u?.name || "System",
+            updatedByUsername: u?.username || "system"
         };
-        list.push(newDoc);
+        if (existingIdx !== -1) {
+            list[existingIdx] = { ...list[existingIdx], ...newDoc };
+        } else {
+            list.push(newDoc);
+        }
         saveLocalColl(collectionName, list);
 
         if (!disableAudit && collectionName !== "auditLogs") {
-            await this.logAudit('CREATE', collectionName, newDoc.id, `تم إنشاء سجل جديد في ${collectionName}`, null, data);
+            const entityLabel = collectionName === 'products' ? 'صنف/منتج' : collectionName === 'users' ? 'مستخدم' : collectionName;
+            const desc = customDescription || `تم إضافة ${entityLabel} جديد: ${data.name || data.username || newDoc.id}`;
+            await this.logAudit('CREATE', collectionName, newDoc.id, desc, null, data);
         }
         return newDoc.id;
     },
 
-    async update(collectionName: string, id: string, data: any, disableAudit: boolean = false) {
+    async update(collectionName: string, id: string, data: any, disableAudit: boolean = false, customDescription?: string) {
         const list = getLocalColl(collectionName);
         const idx = list.findIndex((item: any) => item.id === id);
         if (idx !== -1) {
+            const u = getCurrentUser();
             const oldVal = { ...list[idx] };
             list[idx] = {
                 ...list[idx],
                 ...data,
-                updatedAt: new Date().toISOString()
+                updatedAt: new Date().toISOString(),
+                updatedBy: u?.id || "SYS",
+                updatedByName: u?.name || "System",
+                updatedByUsername: u?.username || "system"
             };
             saveLocalColl(collectionName, list);
+
+            // Cascade update for related records (invoices, transactions, quick_financial_entries)
+            if (collectionName === 'customers' || collectionName === 'suppliers') {
+                const partnerName = data.name;
+                const partnerPhone = data.phone;
+                
+                const updateObj: any = {};
+                if (partnerName !== undefined) updateObj.partnerName = partnerName;
+                if (partnerPhone !== undefined) updateObj.partnerPhone = partnerPhone;
+                
+                if (Object.keys(updateObj).length > 0) {
+                    const collectionsToUpdate = ["invoices", "transactions", "quick_financial_entries"];
+                    collectionsToUpdate.forEach(collName => {
+                        try {
+                            const collList = getLocalColl(collName);
+                            let modified = false;
+                            const updatedCollList = collList.map((item: any) => {
+                                if (item.partnerId === id) {
+                                    modified = true;
+                                    return { 
+                                        ...item, 
+                                        ...updateObj, 
+                                        updatedAt: new Date().toISOString() 
+                                    };
+                                }
+                                return item;
+                            });
+                            if (modified) {
+                                saveLocalColl(collName, updatedCollList);
+                                console.log(`[localDbService] Cascaded partner update to ${collName} for partnerId ${id}`);
+                            }
+                        } catch (err) {
+                            console.error(`[localDbService] Failed to cascade partner update to ${collName}:`, err);
+                        }
+                    });
+                }
+            }
+
             if (!disableAudit && collectionName !== "auditLogs") {
-                await this.logAudit('UPDATE', collectionName, id, `تم تعديل السجل في ${collectionName}`, oldVal, data);
+                const entityLabel = collectionName === 'products' ? 'صنف/منتج' : collectionName === 'users' ? 'مستخدم' : collectionName;
+                const desc = customDescription || `تم تعديل ${entityLabel}: ${oldVal?.name || oldVal?.username || id}`;
+                await this.logAudit('UPDATE', collectionName, id, desc, oldVal, data);
             }
         }
     },
 
     async softDelete(collectionName: string, id: string) {
-        await this.update(collectionName, id, { recordStatus: 'deleted' }, true);
-        await this.logAudit('DELETE', collectionName, id, `نقل إلى سلة المحذوفات في ${collectionName}`);
+        await this.delete(collectionName, id);
     },
 
     async restoreArchived(collectionName: string, id: string) {
-        await this.update(collectionName, id, { recordStatus: 'active' }, true);
-        await this.logAudit('RESTORE', collectionName, id, `استعادة سجل من المحذوفات في ${collectionName}`);
+        // Since we now do permanent deletes, restore is no longer applicable
+        console.warn(`Attempted to restore ${id} from ${collectionName}, but permanent deletion is enabled.`);
     },
 
     async delete(collectionName: string, id: string) {
@@ -234,11 +270,21 @@ export const localDbService = {
             partnerId = pId;
         }
 
-        const invoiceId = generateId();
+        let maxInvoiceNum = 0;
         const invoices = getLocalColl("invoices");
+        invoices.forEach((inv: any) => {
+            if (inv.type === invoice.type && inv.invoiceNumber) {
+                const num = parseInt(inv.invoiceNumber, 10);
+                if (!isNaN(num) && num > maxInvoiceNum) maxInvoiceNum = num;
+            }
+        });
+        const sequentialInvoiceNumber = String(maxInvoiceNum + 1);
+
+        const invoiceId = generateId();
         const newInvoice = {
             ...invoice,
             id: invoiceId,
+            invoiceNumber: sequentialInvoiceNumber,
             partnerId: partnerId,
             recordStatus: 'active',
             updatedAt: now,
@@ -299,17 +345,57 @@ export const localDbService = {
             }
             saveLocalColl("transactions", trans);
         }
+        await this.logAudit('CREATE', 'invoices', invoiceId, `إنشاء فاتورة ${invoice.type === 'sale' ? 'مبيعات' : 'مشتريات'} جديدة بقيمة ${invoice.total}`, null, invoice);
 
         return invoiceId;
     },
 
     async deleteInvoiceData(invoice: any) {
+        const transactions = getLocalColl("transactions");
+        const linkedTransactions = transactions.filter(t => t.sourceId === invoice.id);
+
         const now = new Date().toISOString();
         const user = getCurrentUser();
         const isApproved = invoice.lifecycleStatus === 'معتمد' || !invoice.lifecycleStatus;
 
+        let cashBoxBalanceBefore = 0;
+        if (invoice.boxId) {
+             const cashBoxes = getLocalColl("cashBoxes");
+             const bIdx = cashBoxes.findIndex((b: any) => b.id === invoice.boxId);
+             if (bIdx !== -1) cashBoxBalanceBefore = cashBoxes[bIdx].balance || 0;
+        }
+
+        // 1. Reverse financial impact of any linked payment transactions
+        for (const trans of linkedTransactions) {
+            if (trans.sourceType === 'invoice_payment') {
+                // Reverse Cashbox balance
+                if (trans.boxId) {
+                    const cashBoxes = getLocalColl("cashBoxes");
+                    const bIdx = cashBoxes.findIndex((b: any) => b.id === trans.boxId);
+                    if (bIdx !== -1) {
+                        const boxAmount = (trans.type === 'قبض' || trans.type === 'customer_receipt') ? trans.amount : -trans.amount;
+                        cashBoxes[bIdx].balance = (cashBoxes[bIdx].balance || 0) - boxAmount;
+                        cashBoxes[bIdx].updatedAt = now;
+                        saveLocalColl("cashBoxes", cashBoxes);
+                    }
+                }
+
+                // Reverse Partner balance
+                if (trans.partnerId) {
+                    const partnerColl = (trans.type === 'قبض' || trans.type === 'customer_receipt') ? "customers" : "suppliers";
+                    const partners = getLocalColl(partnerColl);
+                    const pIdx = partners.findIndex((p: any) => p.id === trans.partnerId);
+                    if (pIdx !== -1) {
+                        partners[pIdx].balance = (partners[pIdx].balance || 0) + trans.amount;
+                        partners[pIdx].updatedAt = now;
+                        saveLocalColl(partnerColl, partners);
+                    }
+                }
+            }
+        }
+
         if (isApproved) {
-            // 1. Reverse stock changes
+            // 2. Reverse stock changes
             if (invoice.items && Array.isArray(invoice.items)) {
                 const products = getLocalColl("products");
                 for (const item of invoice.items) {
@@ -325,7 +411,7 @@ export const localDbService = {
                 saveLocalColl("products", products);
             }
 
-            // 2. Reverse Financial Impact
+            // 3. Reverse Financial Impact
             const impact = FinancialEngine.getInvoiceImpact(invoice, user);
 
             if (invoice.partnerId && impact.partnerBalanceChange !== 0) {
@@ -348,29 +434,32 @@ export const localDbService = {
                 }
                 saveLocalColl("cashBoxes", cashBoxes);
             }
-
-            // 3. Soft Delete associated transactions
-            const transactions = getLocalColl("transactions");
-            transactions.forEach(t => {
-                if (t.sourceId === invoice.id) {
-                    t.recordStatus = 'deleted';
-                    t.updatedAt = now;
-                }
-            });
-            saveLocalColl("transactions", transactions);
         }
 
+        // 4. Hard Delete associated transactions
+        const remainingTransactions = transactions.filter(t => t.sourceId !== invoice.id);
+        saveLocalColl("transactions", remainingTransactions);
+
+        // 5. Hard Delete the invoice itself
         if (invoice.id) {
             const invoices = getLocalColl("invoices");
-            const idx = invoices.findIndex((i: any) => i.id === invoice.id);
-            if (idx !== -1) {
-                invoices[idx].recordStatus = 'deleted';
-                invoices[idx].updatedAt = now;
-            }
-            saveLocalColl("invoices", invoices);
+            const filteredInvoices = invoices.filter((i: any) => i.id !== invoice.id);
+            saveLocalColl("invoices", filteredInvoices);
         }
 
-        await this.logAudit('DELETE', 'Invoice', invoice.id, `فاتورة ${invoice.type === 'sale' ? 'مبيعات' : 'مشتريات'} أرسلت للأرشيف`, invoice, null);
+        let cashBoxBalanceAfter = 0;
+        if (invoice.boxId) {
+             const cashBoxes = getLocalColl("cashBoxes");
+             const bIdx = cashBoxes.findIndex((b: any) => b.id === invoice.boxId);
+             if (bIdx !== -1) cashBoxBalanceAfter = cashBoxes[bIdx].balance || 0;
+        }
+
+        await this.logAudit('DELETE', 'Invoice', invoice.id, `فاتورة ${invoice.type === 'sale' ? 'مبيعات' : 'مشتريات'} تم حذفها جذرياً من قاعدة البيانات`, invoice, null, {
+            originalCreatedAt: invoice.createdAt,
+            originalCreatedBy: invoice.createdBy,
+            cashBoxBalanceBefore,
+            cashBoxBalanceAfter
+        });
     },
 
     async updateInvoiceData(oldInvoice: any, newInvoiceData: any) {
@@ -505,6 +594,10 @@ export const localDbService = {
                 saveLocalColl("invoices", invoices);
             }
         }
+        await this.logAudit('UPDATE', 'invoices', oldInvoice.id, `تعديل فاتورة ${oldInvoice.type === 'sale' ? 'مبيعات' : 'مشتريات'}`, oldInvoice, newInvoiceData, {
+            originalCreatedAt: oldInvoice.createdAt,
+            originalCreatedBy: oldInvoice.createdBy
+        });
     },
 
     async addTransaction(trans: any) {
@@ -541,6 +634,73 @@ export const localDbService = {
             }
             saveLocalColl("cashBoxes", cashBoxes);
         }
+
+        await this.logAudit('CREATE', 'Transaction', tId, `إضافة حركة مالية جديدة بقيمة ${trans.amount}`, null, trans);
+    },
+
+    async recordInvoicePayment(invoice: any, paymentAmount: number, boxId: string, newPaid: number, newStatus: string) {
+        const u = getCurrentUser();
+        const now = new Date().toISOString();
+
+        // 1. Update the invoice
+        const invoices = getLocalColl("invoices");
+        const invIdx = invoices.findIndex((i: any) => i.id === invoice.id);
+        if (invIdx !== -1) {
+            invoices[invIdx].paid = newPaid;
+            invoices[invIdx].status = newStatus;
+            invoices[invIdx].updatedAt = now;
+            invoices[invIdx].updatedBy = u?.id || "SYS";
+            saveLocalColl("invoices", invoices);
+        }
+
+        // 2. Create the transaction
+        const transType = invoice.type === 'sale' ? 'قبض' : 'صرف';
+        const trans = {
+            id: generateId(),
+            type: transType,
+            amount: paymentAmount,
+            currency: invoice.currency || 'YER',
+            description: `دفعة من الحساب للفاتورة: #${invoice.invoiceNumber || invoice.id?.slice(0, 8).toUpperCase()}`,
+            partnerId: invoice.partnerId,
+            partnerName: invoice.partnerName,
+            boxId: boxId,
+            relatedId: invoice.id,
+            sourceType: 'invoice_payment',
+            sourceId: invoice.id,
+            recordStatus: 'active',
+            createdAt: now,
+            updatedAt: now,
+            createdBy: u?.name || 'System',
+        };
+        const transList = getLocalColl("transactions");
+        transList.push(trans);
+        saveLocalColl("transactions", transList);
+
+        // 3. Update Partner Balance
+        if (trans.partnerId) {
+            const partnerCollName = (transType === 'قبض' || (transType as string) === 'customer_receipt') ? 'customers' : 'suppliers';
+            const partners = getLocalColl(partnerCollName);
+            const pIdx = partners.findIndex((p: any) => p.id === trans.partnerId);
+            if (pIdx !== -1) {
+                partners[pIdx].balance = (partners[pIdx].balance || 0) - trans.amount;
+                partners[pIdx].updatedAt = now;
+                saveLocalColl(partnerCollName, partners);
+            }
+        }
+
+        // 4. Update Cash Box
+        if (trans.boxId) {
+            const cashBoxes = getLocalColl("cashBoxes");
+            const bIdx = cashBoxes.findIndex((b: any) => b.id === trans.boxId);
+            if (bIdx !== -1) {
+                const boxAmount = (transType === 'قبض' || (transType as string) === 'customer_receipt') ? trans.amount : -trans.amount;
+                cashBoxes[bIdx].balance = (cashBoxes[bIdx].balance || 0) + boxAmount;
+                cashBoxes[bIdx].updatedAt = now;
+                saveLocalColl("cashBoxes", cashBoxes);
+            }
+        }
+
+        await this.logAudit('UPDATE', 'Invoice', invoice.id, `تسجيل دفعة نقدية للفاتورة: ${paymentAmount}`);
     },
 
     async updateTransactionData(oldTrans: any, newTrans: any) {
@@ -591,11 +751,11 @@ export const localDbService = {
                 updatedAt: new Date().toISOString()
             };
             saveLocalColl("transactions", trans);
+            await this.logAudit('UPDATE', 'Transaction', oldTrans.id, `تعديل حركة مالية`, oldTrans, newTrans);
         }
     },
-
     async deleteTransactionData(trans: any) {
-        if (trans.type === 'تحويل') {
+        if (trans.type === "تحويل") {
             if (trans.fromBoxId) {
                 const cashBoxes = getLocalColl("cashBoxes");
                 const idx = cashBoxes.findIndex((b: any) => b.id === trans.fromBoxId);
@@ -614,7 +774,7 @@ export const localDbService = {
             }
         } else {
             if (trans.partnerId) {
-                const pColl = trans.type === 'قبض' ? 'customers' : 'suppliers';
+                const pColl = (trans.type === "قبض" || trans.type === "customer_receipt") ? "customers" : "suppliers";
                 const partners = getLocalColl(pColl);
                 const idx = partners.findIndex((p: any) => p.id === trans.partnerId);
                 if (idx !== -1) {
@@ -626,24 +786,43 @@ export const localDbService = {
                 const cashBoxes = getLocalColl("cashBoxes");
                 const idx = cashBoxes.findIndex((b: any) => b.id === trans.boxId);
                 if (idx !== -1) {
-                    const change = trans.type === 'قبض' ? trans.amount : -trans.amount;
+                    const change = (trans.type === "قبض" || trans.type === "customer_receipt") ? trans.amount : -trans.amount;
                     cashBoxes[idx].balance = (cashBoxes[idx].balance || 0) - change;
                 }
                 saveLocalColl("cashBoxes", cashBoxes);
             }
         }
 
-        if (trans.id) {
-            const transactions = getLocalColl("transactions");
-            const idx = transactions.findIndex((t: any) => t.id === trans.id);
+        if ((trans.sourceType === "invoice_payment" || trans.sourceType === "manual_receipt" || trans.sourceType === "manual_payment") && trans.sourceId) {
+            const invoices = getLocalColl("invoices");
+            const idx = invoices.findIndex((i: any) => i.id === trans.sourceId);
             if (idx !== -1) {
-                transactions[idx].recordStatus = 'deleted';
-                transactions[idx].updatedAt = new Date().toISOString();
-                saveLocalColl("transactions", transactions);
+                const invData = invoices[idx];
+                const oldPaid = Number(invData.paid || 0);
+                const newPaid = Math.max(0, oldPaid - trans.amount);
+                
+                const netTotal = Number(invData.total || 0) - Number(invData.discount || 0);
+                let newStatus = invData.status;
+                if (newPaid <= 0) {
+                    newStatus = "آجل";
+                } else if (newPaid < netTotal) {
+                    newStatus = "جزئي";
+                } else {
+                    newStatus = "مدفوع";
+                }
+                invoices[idx].paid = newPaid;
+                invoices[idx].status = newStatus;
+                invoices[idx].updatedAt = new Date().toISOString();
+                saveLocalColl("invoices", invoices);
             }
         }
 
-        await this.logAudit('DELETE', 'Transaction', trans.id, `إرسال حركة مالية بقيمة ${trans.amount} للأرشيف`, trans, null);
+        if (trans.id) {
+            const transactions = getLocalColl("transactions");
+            const filteredTransactions = transactions.filter((t: any) => t.id !== trans.id);
+            saveLocalColl("transactions", filteredTransactions);
+        }
+        await this.logAudit("DELETE", "Transaction", trans.id, `إرسال حركة مالية بقيمة ${trans.amount} للأرشيف`, trans, null);
     },
 
     async deleteAllTransactions() {
@@ -674,8 +853,9 @@ export const localDbService = {
         saveLocalColl("cashBoxes", cashBoxes);
 
         const trans = getLocalColl("transactions");
+        const transId = generateId();
         trans.push({
-            id: generateId(),
+            id: transId,
             type: 'تحويل',
             amount,
             currency,
@@ -687,6 +867,8 @@ export const localDbService = {
             updatedAt: now
         });
         saveLocalColl("transactions", trans);
+
+        await this.logAudit('CREATE', 'Transaction', transId, `عملية تحويل مالي بقيمة ${amount}`, null, { fromBoxId, toBoxId, amount, currency, description });
     },
 
     async updateBoxBalance(boxId: string, amount: number) {
@@ -706,6 +888,7 @@ export const localDbService = {
             });
         }
         saveLocalColl("cashBoxes", cashBoxes);
+        await this.logAudit('UPDATE', 'cashBoxes', boxId, `تعديل رصيد الصندوق بقيمة ${amount}`);
     },
 
     async createFullDatabaseBackup() {
@@ -751,6 +934,16 @@ export const localDbService = {
         }
         
         await this.logAudit('SETTINGS_CHANGE', 'System', 'RESTORE', 'تم استعادة قاعدة البيانات من نسخة احتياطية بنجاح');
+    },
+
+    async dumpData() {
+        const collections = ["products", "customers", "suppliers", "invoices", "transactions", "cashBoxes", "auditLogs"];
+        const data: any = {};
+        for (const col of collections) {
+            data[col] = getLocalColl(col);
+        }
+        console.log("Database Dump:", JSON.stringify(data, null, 2));
+        return data;
     },
 
     async getStoreSettings() {
@@ -850,7 +1043,105 @@ export const localDbService = {
         }
         saveLocalColl("transactions", trans);
 
+        await this.logAudit('CREATE', 'QuickEntry', entryRefId, `إضافة إدخال مالي سريع بقيمة ${entry.netAmount}`, null, entry);
+
         return entryRefId;
+    },
+
+    async updateQuickFinancialEntry(oldEntry: any, newEntry: any) {
+        const now = new Date().toISOString();
+        const user = getCurrentUser();
+
+        // 1. Reverse Old Impact
+        const oldImpact = FinancialEngine.getQuickEntryImpact(oldEntry, user);
+        if (oldEntry.partnerId && oldImpact.partnerBalanceChange !== 0) {
+            const partnerColl = oldEntry.partnerType === 'customer' ? "customers" : "suppliers";
+            const partners = getLocalColl(partnerColl);
+            const idx = partners.findIndex((p: any) => p.id === oldEntry.partnerId);
+            if (idx !== -1) {
+                partners[idx].balance = (partners[idx].balance || 0) - oldImpact.partnerBalanceChange;
+                partners[idx].updatedAt = now;
+            }
+            saveLocalColl(partnerColl, partners);
+        }
+        if (oldEntry.cashBoxId && oldImpact.cashBoxBalanceChange !== 0) {
+            const boxes = getLocalColl("cashBoxes");
+            const idx = boxes.findIndex((b: any) => b.id === oldEntry.cashBoxId);
+            if (idx !== -1) {
+                boxes[idx].balance = (boxes[idx].balance || 0) - oldImpact.cashBoxBalanceChange;
+                boxes[idx].updatedAt = now;
+            }
+            saveLocalColl("cashBoxes", boxes);
+        }
+
+        // 2. Handle Partner Auto-creation for new state
+        let partnerId = newEntry.partnerId;
+        if (newEntry.autoCreatePartner && !partnerId) {
+            const pColl = newEntry.partnerType === 'customer' ? "customers" : "suppliers";
+            const partners = getLocalColl(pColl);
+            partnerId = generateId();
+            partners.push({
+                id: partnerId,
+                name: newEntry.partnerName,
+                phone: newEntry.partnerPhone || "جديد",
+                balance: 0,
+                recordStatus: 'active',
+                updatedAt: now,
+                createdAt: now
+            });
+            saveLocalColl(pColl, partners);
+        }
+
+        // 3. Apply New Impact
+        const newImpact = FinancialEngine.getQuickEntryImpact({ ...newEntry, id: oldEntry.id, partnerId }, user);
+        if (partnerId && newImpact.partnerBalanceChange !== 0) {
+            const pColl = newEntry.partnerType === 'customer' ? "customers" : "suppliers";
+            const partners = getLocalColl(pColl);
+            const idx = partners.findIndex((p: any) => p.id === partnerId);
+            if (idx !== -1) {
+                partners[idx].balance = (partners[idx].balance || 0) + newImpact.partnerBalanceChange;
+                partners[idx].updatedAt = now;
+            }
+            saveLocalColl(pColl, partners);
+        }
+        if (newEntry.cashBoxId && newImpact.cashBoxBalanceChange !== 0) {
+            const boxes = getLocalColl("cashBoxes");
+            const idx = boxes.findIndex((b: any) => b.id === newEntry.cashBoxId);
+            if (idx !== -1) {
+                boxes[idx].balance = (boxes[idx].balance || 0) + newImpact.cashBoxBalanceChange;
+                boxes[idx].updatedAt = now;
+            }
+            saveLocalColl("cashBoxes", boxes);
+        }
+
+        // 4. Update Entry Record
+        const entries = getLocalColl("quick_financial_entries");
+        const eIdx = entries.findIndex(e => e.id === oldEntry.id);
+        if (eIdx !== -1) {
+            entries[eIdx] = {
+                ...entries[eIdx],
+                ...newEntry,
+                id: oldEntry.id,
+                partnerId,
+                updatedAt: now
+            };
+            saveLocalColl("quick_financial_entries", entries);
+        }
+
+        // 5. Update Transactions
+        const transactions = getLocalColl("transactions");
+        const filteredTrans = transactions.filter(t => t.sourceId !== oldEntry.id);
+        for (const transData of newImpact.transactions) {
+            filteredTrans.push({
+                ...transData,
+                id: generateId(),
+                recordStatus: 'active',
+                updatedAt: now
+            });
+        }
+        saveLocalColl("transactions", filteredTrans);
+
+        await this.logAudit('UPDATE', 'QuickEntry', oldEntry.id, `تعديل إدخال مالي سريع`, oldEntry, newEntry);
     },
 
     async deleteQuickFinancialEntry(entry: any) {
@@ -881,21 +1172,12 @@ export const localDbService = {
         }
 
         const entries = getLocalColl("quick_financial_entries");
-        const eIdx = entries.findIndex(e => e.id === entry.id);
-        if (eIdx !== -1) {
-            entries[eIdx].recordStatus = 'deleted';
-            entries[eIdx].updatedAt = now;
-        }
-        saveLocalColl("quick_financial_entries", entries);
+        const filteredEntries = entries.filter(e => e.id !== entry.id);
+        saveLocalColl("quick_financial_entries", filteredEntries);
 
         const transactions = getLocalColl("transactions");
-        transactions.forEach(t => {
-            if (t.sourceId === entry.id) {
-                t.recordStatus = 'deleted';
-                t.updatedAt = now;
-            }
-        });
-        saveLocalColl("transactions", transactions);
+        const filteredTransactions = transactions.filter(t => t.sourceId !== entry.id);
+        saveLocalColl("transactions", filteredTransactions);
     },
 
     async updateStoreSettings(data: any) {
@@ -908,5 +1190,6 @@ export const localDbService = {
             settings.push({ id: 'main_settings', ...data, updatedAt: now });
         }
         saveLocalColl("settings", settings);
+        await this.logAudit('SETTINGS_CHANGE', 'Settings', 'main_settings', 'تحديث إعدادات النظام والمتجر', null, data);
     }
 };

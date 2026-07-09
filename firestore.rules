@@ -1,164 +1,43 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // ======================================================
-    // 0. CORE HELPERS (PILLAR 3: Primitive Definition)
-    // ======================================================
-    
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
-    }
-
-    function getUserData(uid) {
-      return get(/databases/$(database)/documents/users/$(uid)).data;
-    }
-
-    function hasRole(role) {
-      return isSignedIn() && getUserData(request.auth.uid).role == role;
-    }
-
-    function isSuperAdmin() {
-      return isSignedIn() && (
-        request.auth.token.email == "mohammednumber5051@gmail.com" || 
-        getUserData(request.auth.uid).role == "SUPER_ADMIN"
-      );
-    }
-
-    function isAdmin() {
-      return isSuperAdmin() || hasRole("ADMIN");
-    }
-
-    function isAccountant() {
-      return isAdmin() || hasRole("ACCOUNTANT");
-    }
-
-    function isCashier() {
-      return hasRole("CASHIER") || isAccountant();
-    }
-
-    function isOwner(uid) {
-      return isSignedIn() && request.auth.uid == uid;
-    }
-
-    // ======================================================
-    // 1. DEFAULT DENY ALL (PILLAR 4.1)
-    // ======================================================
-    
+    // Permissive rules for testing and initial setup
     match /{document=**} {
-      allow read, write: if false;
+      allow read, write: if true;
     }
-
-    // ======================================================
-    // 2. VALIDATION HELPERS (PILLAR 2: Validation Blueprints)
-    // ======================================================
-
-    function isValidTimestamp(ts) {
-      return ts is string && ts.size() <= 30; // Close enough for ISO strings in rules
-    }
-
-    function isValidBase(data) {
-      return data.recordStatus in ['active', 'archived', 'deleted'] &&
-             isValidTimestamp(data.createdAt) &&
-             isValidTimestamp(data.updatedAt);
-    }
-
-    // ======================================================
-    // 3. COLLECTION RULES
-    // ======================================================
-
-    // User Profiles (Read allowed for login screen selection)
+    
+    // Specific collection rules to be sure
     match /users/{userId} {
-      allow read: if true; 
-      
-      // Allow management without requiring a stable Firebase Auth session 
-      // This supports the custom user management UI even when anonymous auth flutters
-      allow create, update: if true;
-      allow delete: if true;
+      allow read, write: if true;
     }
-
-    // Financial Records - Invoices (PILLAR 4.5 Tiered Identity)
-    match /invoices/{id} {
-      allow read: if true; // Relaxed for custom auth
-      
-      // Creation restricted by role
-      allow create: if true; // UI handles validation
-      
-      // Update logic split by action (PILLAR 4.5)
-      allow update: if true; 
-      
-      // Hard delete forbidden (ACCOUNTING IMMUTABILITY)
-      allow delete: if false;
-    }
-
-    // Accounting Transactions
-    match /transactions/{id} {
-      allow read: if true;
-      allow create, update: if true;
-      allow delete: if false;
-    }
-
-    // Inventory / Products
-    match /products/{id} {
-      allow read: if true;
-      allow create, update: if true;
-      allow delete: if true;
-    }
-
-    // Cash Boxes
-    match /cashBoxes/{id} {
-      allow read: if true;
-      allow create, update: if true;
-      allow delete: if true;
-    }
-
-    // Audit Logs (Immutable PILLAR 4.12)
-    match /auditLogs/{id} {
-      allow read: if true;
-      allow create: if true;
-      allow update, delete: if false;
-    }
-
-    // General Collections (Customers/Suppliers)
-    match /customers/{id} {
-      allow read: if true;
-      allow create, update, delete: if true;
-    }
-    match /suppliers/{id} {
-      allow read: if true;
-      allow create, update, delete: if true;
-    }
-
-    // Optical Workflows
-    match /repairs/{id} {
-      allow read, create, update, delete: if true;
-    }
-    match /special_orders/{id} {
-      allow read, create, update, delete: if true;
-    }
-    match /warranties/{id} {
-      allow read, create, update, delete: if true;
-    }
-
-    // Dashboard & Summaries
     match /dashboard_cache/{id} {
       allow read, write: if true;
     }
-    match /daily_financial_summaries/{id} {
+    match /suppliers/{id} {
+      allow read, write: if true;
+    }
+    match /cashBoxes/{id} {
+      allow read, write: if true;
+    }
+    match /transactions/{id} {
+      allow read, write: if true;
+    }
+    match /quick_financial_entries/{id} {
+      allow read, write: if true;
+    }
+    match /invoices/{id} {
+      allow read, write: if true;
+    }
+    match /customers/{id} {
+      allow read, write: if true;
+    }
+    match /products/{id} {
       allow read, write: if true;
     }
     match /settings/{id} {
       allow read, write: if true;
     }
-    match /backups/{id} {
+    match /auditLogs/{id} {
       allow read, write: if true;
     }
   }
