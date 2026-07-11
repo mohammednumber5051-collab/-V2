@@ -74,14 +74,14 @@ export class AggregationEngine {
 
         addField(impact.salesTotal, 'salesTotal');
         addField(impact.purchasesTotal, 'purchasesTotal');
-        addField(impact.receiptsTotal, 'receiptsTotal', true, false); // Receipts/Payments usually daily focused
-        addField(impact.paymentsTotal, 'paymentsTotal', true, false);
+        addField(impact.receiptsTotal, 'receiptsTotal', true, true); // Include in monthly for cash flow reporting
+        addField(impact.paymentsTotal, 'paymentsTotal', true, true);
         addField(impact.expensesTotal, 'expensesTotal', true, true);
         addField(impact.profitsTotal, 'profitsTotal', true, true);
         
-        // Receivables/Payables affect daily snapshot and global dashboard
-        addField(impact.receivablesChange, 'receivablesTotal', true, false, true);
-        addField(impact.payablesChange, 'payablesTotal', true, false, true);
+        // Receivables/Payables affect daily snapshot, monthly summaries, and global dashboard
+        addField(impact.receivablesChange, 'receivablesTotal', true, true, true);
+        addField(impact.payablesChange, 'payablesTotal', true, true, true);
 
         addField(impact.transactionCount, 'transactionCount', true, false);
         

@@ -133,7 +133,8 @@ export class FinancialEngine {
         }
 
         agg.transactionCount = isReversion ? -transactions.length : transactions.length;
-        return { transactions: isReversion ? [] : transactions, partnerBalanceChange, cashBoxBalanceChange, aggregationImpact: agg };
+        // Apply mult so reversals correctly negate balance changes
+        return { transactions: isReversion ? [] : transactions, partnerBalanceChange: partnerBalanceChange * mult, cashBoxBalanceChange: cashBoxBalanceChange * mult, aggregationImpact: agg };
     }
 
     /**
@@ -200,7 +201,8 @@ export class FinancialEngine {
         if (transType === 'قبض') {
             if (entry.entryType === 'manual_sale') {
                 agg.salesTotal = entry.netAmount * mult;
-                agg.profitsTotal = entry.netAmount * mult; // Assuming 100% profit for manual entries
+                const manualCost = entry.costAmount || 0;
+                agg.profitsTotal = (entry.netAmount - manualCost) * mult;
             } else {
                 agg.receiptsTotal = entry.netAmount * mult;
             }
@@ -217,6 +219,7 @@ export class FinancialEngine {
             agg.cashBalanceChange = -paid * mult;
         }
 
-        return { transactions: isReversion ? [] : transactions, partnerBalanceChange, cashBoxBalanceChange, aggregationImpact: agg };
+        // Apply mult so reversals correctly negate balance changes
+        return { transactions: isReversion ? [] : transactions, partnerBalanceChange: partnerBalanceChange * mult, cashBoxBalanceChange: cashBoxBalanceChange * mult, aggregationImpact: agg };
     }
 }
