@@ -256,6 +256,7 @@ export type TransactionSourceType =
     | 'quick_financial_entry' 
     | 'manual_receipt' 
     | 'manual_payment' 
+    | 'invoice_payment'
     | 'adjustment' 
     | 'transfer';
 

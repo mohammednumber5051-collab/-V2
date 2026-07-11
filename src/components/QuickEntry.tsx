@@ -6,6 +6,7 @@ import { dbService } from "../services/db";
 import { QuickFinancialEntry, QuickEntryType, Currency, InvoiceStatus, CashBox, StoreSettings, AppUser, OpticalPrescription , Customer , Supplier } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
+import { calculateUnifiedCashBalances } from "../lib/financialUtils";
 import PrintPreviewModal from "./PrintPreviewModal";
 
 const safeNewDate = (val: any): Date => {
@@ -28,10 +29,7 @@ interface QuickEntryProps {
 
 const ENTRY_TYPES: { value: QuickEntryType; label: string; color: string }[] = [
     { value: 'manual_sale', label: 'مبيعات يدوية', color: 'blue' },
-    { value: 'manual_purchase', label: 'مشتريات يدوية', color: 'rose' },
-    { value: 'receipt', label: 'سند قبض', color: 'emerald' },
-    { value: 'payment', label: 'سند صرف', color: 'amber' },
-    { value: 'adjustment', label: 'تسوية مالية', color: 'slate' }
+    { value: 'manual_purchase', label: 'مشتريات يدوية', color: 'rose' }
 ];
 
 const ENTRY_TYPE_LABELS: Record<string, string> = {
@@ -92,6 +90,7 @@ export default function QuickEntry({ onNavigate, editId, currentUser: propCurren
     const [settings, setSettings] = useState<StoreSettings | null>(null);
     const [currentUser, setCurrentUser] = useState<AppUser | null>(propCurrentUser || null);
     const [oldEntryData, setOldEntryData] = useState<QuickFinancialEntry | null>(null);
+    const [calculatedBalances, setCalculatedBalances] = useState<Record<string, number>>({});
     const [validationError, setValidationError] = useState<string | null>(null);
 
     // Print Preview States
@@ -135,7 +134,7 @@ export default function QuickEntry({ onNavigate, editId, currentUser: propCurren
     const numAmount = parseFloat(amount.replace(/,/g, '')) || 0;
     const numDiscount = parseFloat(discount.replace(/,/g, '')) || 0;
     const netAmount = Math.max(0, numAmount - numDiscount);
-    const numPaid = paidAmount === "" ? netAmount : (parseFloat(paidAmount.replace(/,/g, '')) || 0);
+    const numPaid = paidAmount === "" ? 0 : (parseFloat(paidAmount.replace(/,/g, '')) || 0);
     const remainingAmount = netAmount - numPaid;
 
     const resetForm = () => {
@@ -201,13 +200,27 @@ export default function QuickEntry({ onNavigate, editId, currentUser: propCurren
         const init = async () => {
             setIsLoading(true);
             try {
-                const [boxes, allSettings, usersList, customersList, suppliersList] = await Promise.all([
+                const [boxes, allSettings, usersList, customersList, suppliersList, txs, invs, vchs, qes] = await Promise.all([
                     dbService.getAll("cashBoxes"),
                     dbService.getStoreSettings(),
                     dbService.getAll("users"),
                     dbService.getAll("customers"),
-                    dbService.getAll("suppliers")
+                    dbService.getAll("suppliers"),
+                    dbService.getAll("transactions"),
+                    dbService.getAll("invoices"),
+                    dbService.getAll("vouchers"),
+                    dbService.getAll("quick_financial_entries")
                 ]);
+
+                const { boxBalances } = calculateUnifiedCashBalances(
+                    boxes as CashBox[],
+                    txs as any[],
+                    invs as any[],
+                    vchs as any[],
+                    qes as any[]
+                );
+                setCalculatedBalances(boxBalances);
+
                 setCashBoxes(boxes as CashBox[]);
                 setSettings(allSettings);
                 setUsers(usersList as AppUser[]);
@@ -656,7 +669,7 @@ export default function QuickEntry({ onNavigate, editId, currentUser: propCurren
                     </div>
 
                     {/* Entry Type Selector */}
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    <div className="grid grid-cols-2 gap-2">
                         {ENTRY_TYPES.map((type) => (
                             <button
                                 key={type.value}
@@ -799,14 +812,25 @@ export default function QuickEntry({ onNavigate, editId, currentUser: propCurren
                                 />
                             </div>
                             <div className="space-y-1.5">
-                                <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest leading-none">المدفوع حالياً</label>
+                                <div className="flex justify-between items-center">
+                                    <label className="text-[10px] font-black text-emerald-500 uppercase tracking-widest leading-none">المدفوع حالياً</label>
+                                    {netAmount > 0 && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setPaidAmount(netAmount.toString())}
+                                            className="text-[9px] font-black text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300 underline focus:outline-none"
+                                        >
+                                            كامل المبلغ ({netAmount.toLocaleString()})
+                                        </button>
+                                    )}
+                                </div>
                                 <input
                                     type="number"
                                     inputMode="decimal"
                                     value={paidAmount}
                                     onChange={(e) => setPaidAmount(e.target.value)}
                                     className="w-full h-[48px] bg-emerald-50 dark:bg-emerald-900/10 border-none rounded-xl text-center text-lg font-black text-emerald-600 dark:text-emerald-400 font-mono"
-                                    placeholder={netAmount > 0 ? netAmount.toString() : "0"}
+                                    placeholder="0"
                                 />
                             </div>
                         </div>
@@ -824,7 +848,7 @@ export default function QuickEntry({ onNavigate, editId, currentUser: propCurren
                                     >
                                         <option value="" disabled>اختر الصندوق المتأثر...</option>
                                         {cashBoxes.map(box => (
-                                            <option key={box.id} value={box.id}>{box.name} ({box.balance.toLocaleString()} {box.currency})</option>
+                                            <option key={box.id} value={box.id}>{box.name} ({(calculatedBalances[box.id!] || 0).toLocaleString()} {box.currency})</option>
                                         ))}
                                     </select>
                                 </div>

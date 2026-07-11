@@ -34,6 +34,7 @@ import {
 } from "../types";
 import { motion, AnimatePresence, useDragControls } from "motion/react";
 import { cn, hasPermission } from "../lib/utils";
+import { calculateUnifiedCashBalances } from "../lib/financialUtils";
 import PrintPreviewModal from "./PrintPreviewModal";
 
 type Tab = "transactions" | "boxes" | "transfers";
@@ -65,6 +66,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
   }>({ customers: [], suppliers: [] });
   const [currentUser, setCurrentUser] = useState<AppUser | null>(propCurrentUser || null);
   const [viewingBoxMovements, setViewingBoxMovements] = useState<FinancialMovement[]>([]);
+  const [calculatedBalances, setCalculatedBalances] = useState<Record<string, number>>({});
   const [isLoadingBoxTransactions, setIsLoadingBoxTransactions] = useState<boolean>(false);
   const [refreshBoxTrigger, setRefreshBoxTrigger] = useState<number>(0);
 
@@ -180,22 +182,51 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
         const [invs, vchs, qes, txs, boxes] = await Promise.all([
             dbService.getAll("invoices"),
             dbService.getAll("vouchers"),
-            dbService.getAll("quickEntries"),
+            dbService.getAll("quick_financial_entries"),
             dbService.getAll("transactions"),
             dbService.getAll("cashBoxes")
         ]);
 
-        const boxMap = new Map((boxes as any[]).map(b => [b.id, b.name]));
+        const { boxBalances } = calculateUnifiedCashBalances(
+            boxes as CashBox[],
+            txs as Transaction[],
+            invs as Invoice[],
+            vchs as Voucher[],
+            qes as QuickFinancialEntry[]
+        );
+
+        const updatedBoxes = (boxes as CashBox[]).map(b => ({
+            ...b,
+            balance: boxBalances[b.id!] || 0
+        }));
+        setCashBoxes(updatedBoxes);
+        setCalculatedBalances(boxBalances);
+
+        const boxMap = new Map((updatedBoxes as any[]).map(b => [b.id, b.name]));
 
         const allMovements: FinancialMovement[] = [];
 
+        // Calculate subsequent payments per invoice to correct the invoice initial paid amount and avoid double counting
+        const subsequentPaymentsMap = new Map<string, number>();
+        (txs as Transaction[]).forEach(tx => {
+            if (tx.recordStatus === 'deleted') return;
+            if (tx.sourceId && tx.sourceType === 'invoice_payment') {
+                const currentSum = subsequentPaymentsMap.get(tx.sourceId) || 0;
+                subsequentPaymentsMap.set(tx.sourceId, currentSum + (tx.amount || 0));
+            }
+        });
+
         (invs as Invoice[]).forEach(inv => {
             if (inv.recordStatus === 'deleted') return;
+            
+            const subsequentPaid = subsequentPaymentsMap.get(inv.id!) || 0;
+            const initialPaid = Math.max(0, (inv.paid || 0) - subsequentPaid);
+            
             const changes: Record<string, number> = {};
-            if (inv.boxId && inv.paid && inv.paid > 0) {
+            if (inv.boxId && initialPaid > 0) {
                 const type = inv.type || 'sale';
                 const baseType = type.replace('_return', '');
-                let boxChange = baseType === 'sale' ? inv.paid : -inv.paid;
+                let boxChange = baseType === 'sale' ? initialPaid : -initialPaid;
                 if (type.includes('return')) boxChange = -boxChange;
                 changes[inv.boxId] = boxChange;
             }
@@ -203,12 +234,16 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
                 id: `inv-${inv.id}`,
                 originalId: inv.id!,
                 source: 'invoice',
-                recordType: inv.type === 'sale' ? 'فاتورة بيع' : 'فاتورة شراء',
+                recordType: 
+                    inv.type === 'sale' ? 'فاتورة بيع' : 
+                    inv.type === 'purchase' ? 'فاتورة شراء' : 
+                    inv.type === 'sale_return' ? 'مرتجع مبيعات' : 
+                    inv.type === 'purchase_return' ? 'مرتجع مشتريات' : 'فاتورة',
                 paymentType: inv.paymentType === 'نقدآ' ? 'نقدا' : inv.paymentType === 'آجل' ? 'اجل' : 'جزئي',
                 partnerName: inv.partnerName || 'عام',
                 totalAmount: inv.total || 0,
                 discount: inv.discount || 0,
-                paidAmount: inv.paid || 0,
+                paidAmount: initialPaid,
                 remainingAmount: (inv.total || 0) - (inv.discount || 0) - (inv.paid || 0),
                 boxName: inv.boxId ? (boxMap.get(inv.boxId) || '') : '',
                 boxChanges: changes,
@@ -274,7 +309,13 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
 
         (txs as Transaction[]).forEach(tx => {
             if (tx.recordStatus === 'deleted') return;
-            if (tx.sourceId) return; // Skip if it's from another document
+            
+            // Skip transactions that represent the invoice itself or its initial payment, or quick entries, to avoid double-counting
+            if (tx.sourceId) {
+                if (tx.sourceType === 'sales_invoice' || tx.sourceType === 'purchase_invoice' || tx.sourceType === 'manual_receipt' || tx.sourceType === 'manual_payment' || tx.sourceType === 'quick_financial_entry') {
+                    return;
+                }
+            }
             
             const changes: Record<string, number> = {};
             if (tx.type === 'تحويل') {
@@ -288,10 +329,10 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
                 id: `tx-${tx.id}`,
                 originalId: tx.id!,
                 source: 'transaction',
-                recordType: tx.type === 'تحويل' ? 'تحويل' : tx.type === 'قبض' ? 'سند قبض (قديم)' : 'سند صرف (قديم)',
+                recordType: tx.sourceType === 'invoice_payment' ? (tx.type === 'قبض' ? 'دفعة فاتورة (وارد)' : 'دفعة فاتورة (صادر)') : tx.type === 'تحويل' ? 'تحويل' : tx.type === 'قبض' ? 'سند قبض (قديم)' : 'سند صرف (قديم)',
                 paymentType: 'نقدا',
                 partnerName: tx.partnerName || 'عام',
-                totalAmount: tx.amount || 0,
+                totalAmount: tx.sourceType === 'invoice_payment' ? 0 : (tx.amount || 0),
                 discount: 0,
                 paidAmount: tx.amount || 0,
                 remainingAmount: 0,
@@ -335,7 +376,8 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
     try {
         if (transToDelete.type === 'قبض' && transToDelete.boxId) {
             const box = cashBoxes.find(b => b.id === transToDelete.boxId);
-            if (box && ((box.balance || 0) - transToDelete.amount!) < 0) {
+            const currentBalance = box ? (boxBalances[box.id!] || 0) : 0;
+            if (box && (currentBalance - transToDelete.amount!) < 0) {
                 alert("لا يمكن حذف سند القبض لأنه سيؤدي إلى رصيد سالب في الصندوق.");
                 setIsSaving(false);
                 setTransToDelete(null);
@@ -343,7 +385,8 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
             }
         } else if (transToDelete.type === 'تحويل' && transToDelete.toBoxId) {
             const box = cashBoxes.find(b => b.id === transToDelete.toBoxId);
-            if (box && ((box.balance || 0) - transToDelete.amount!) < 0) {
+            const currentBalance = box ? (boxBalances[box.id!] || 0) : 0;
+            if (box && (currentBalance - transToDelete.amount!) < 0) {
                 alert("لا يمكن حذف التحويل لأنه سيؤدي إلى رصيد سالب في الصندوق المستلم.");
                 setIsSaving(false);
                 setTransToDelete(null);
@@ -394,7 +437,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
         
         const totalIn = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] > 0) ? curr.boxChanges[viewingBox.id] : 0), 0);
         const totalOut = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] < 0) ? Math.abs(curr.boxChanges[viewingBox.id]) : 0), 0);
-        const openingBalance = viewingBox.initialBalance !== undefined ? viewingBox.initialBalance : (viewingBox.balance || 0) - totalIn + totalOut;
+        const openingBalance = viewingBox.initialBalance !== undefined ? viewingBox.initialBalance : (calculatedBalances[viewingBox.id!] || viewingBox.balance || 0) - totalIn + totalOut;
         
         const dateStr = new Date().toLocaleDateString('ar-YE', { 
             year: 'numeric', month: '2-digit', day: '2-digit'
@@ -418,7 +461,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
                 <div class="row"><span>الصندوق:</span> <strong>${viewingBox.name}</strong></div>
                 <div class="row"><span>الرصيد الافتتاحي:</span> <strong>${(openingBalance || 0).toLocaleString()} ${viewingBox.currency}</strong></div>
                 <div class="row" style="border-top:1px dashed #000; padding-top:2px; margin-top: 2px;">
-                    <span>الرصيد الحالي:</span> <strong>${(viewingBox.balance || 0).toLocaleString()} ${viewingBox.currency}</strong>
+                    <span>الرصيد الحالي:</span> <strong>${(openingBalance + totalIn - totalOut).toLocaleString()} ${viewingBox.currency}</strong>
                 </div>
                 <table class="thermal-table">
                     <thead><tr><th>التاريخ</th><th>الحركة</th><th style="text-align: left;">المبلغ</th></tr></thead>
@@ -481,7 +524,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
                     <div class="fin-card"><div style="font-size:10px; font-weight:bold;">الرصيد الافتتاحي</div><div style="font-size:15px; font-weight:900; color:#ea580c; font-family:monospace;">${(openingBalance || 0).toLocaleString()}</div></div>
                     <div class="fin-card"><div style="font-size:10px; font-weight:bold;">وارد (المقبوضات)</div><div style="font-size:15px; font-weight:900; color:#059669; font-family:monospace;">${(totalIn || 0).toLocaleString()}</div></div>
                     <div class="fin-card"><div style="font-size:10px; font-weight:bold;">صادر (المصروفات)</div><div style="font-size:15px; font-weight:900; color:#e11d48; font-family:monospace;">${(totalOut || 0).toLocaleString()}</div></div>
-                    <div class="fin-card" style="background:#f8fafc;"><div style="font-size:10px; font-weight:bold;">الرصيد المتاح</div><div style="font-size:15px; font-weight:900; color:#1e3a8a; font-family:monospace;">${(viewingBox.balance || 0).toLocaleString()}</div></div>
+                    <div class="fin-card" style="background:#f8fafc;"><div style="font-size:10px; font-weight:bold;">الرصيد المتاح</div><div style="font-size:15px; font-weight:900; color:#1e3a8a; font-family:monospace;">${(openingBalance + totalIn - totalOut).toLocaleString()}</div></div>
                 </div>
                 <table class="table">
                     <thead><tr><th>التاريخ</th><th>الحركة</th><th style="text-align: left;">المبلغ</th><th>البيان والتفاصيل</th><th style="text-align: left;">الرصيد</th></tr></thead>
@@ -844,30 +887,80 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
                                 matchDate = dateStr === filterStartDate;
                             }
 
-                            const matchRecordType = filterRecordType === 'all' ? true : m.recordType === filterRecordType;
+                            let matchRecordType = true;
+                            if (filterRecordType !== 'all') {
+                                if (filterRecordType === 'سند قبض') {
+                                    matchRecordType = m.recordType === 'سند قبض' || m.recordType === 'سند قبض (سريع)' || m.recordType === 'سند قبض (قديم)' || m.recordType === 'دفعة فاتورة (وارد)';
+                                } else if (filterRecordType === 'سند صرف') {
+                                    matchRecordType = m.recordType === 'سند صرف' || m.recordType === 'سند صرف (سريع)' || m.recordType === 'سند صرف (قديم)' || m.recordType === 'دفعة فاتورة (صادر)';
+                                } else if (filterRecordType === 'فاتورة بيع') {
+                                    matchRecordType = m.recordType === 'فاتورة بيع' || m.recordType === 'فاتورة بيع (سريع)';
+                                } else if (filterRecordType === 'فاتورة شراء') {
+                                    matchRecordType = m.recordType === 'فاتورة شراء' || m.recordType === 'فاتورة شراء (سريع)';
+                                } else {
+                                    matchRecordType = m.recordType === filterRecordType;
+                                }
+                            }
+
                             const matchPaymentType = filterPaymentType === 'all' ? true : m.paymentType === filterPaymentType;
                             const matchUser = filterUser === 'all' ? true : m.createdBy === filterUser;
 
                             return matchDate && matchRecordType && matchPaymentType && matchUser;
                         });
 
-                        const totalAmount = filteredMovements.reduce((sum, m) => sum + m.totalAmount, 0);
-                        const totalPaidCash = filteredMovements.reduce((sum, m) => sum + m.paidAmount, 0);
-                        const totalRemaining = filteredMovements.reduce((sum, m) => sum + m.remainingAmount, 0);
+                        const isPurchaseFilter = filterRecordType.includes('شراء') || filterRecordType === 'سند صرف';
+                        const salesPurchasesLabel = isPurchaseFilter ? "إجمالي المشتريات" : "إجمالي المبيعات";
+                        
+                        const totalSales = filteredMovements.reduce((sum, m) => {
+                            const isReturn = m.recordType.includes('مرتجع');
+                            const sign = isReturn ? -1 : 1;
+                            
+                            if (isPurchaseFilter) {
+                                const isPurchase = m.recordType.includes('شراء') || m.recordType.includes('صرف') || m.recordType.includes('صادر') || m.recordType.includes('مشتريات');
+                                return sum + (isPurchase ? m.totalAmount * sign : 0);
+                            } else {
+                                const isSale = m.recordType.includes('بيع') || m.recordType.includes('قبض') || m.recordType.includes('وارد') || m.recordType.includes('مبيعات');
+                                return sum + (isSale ? m.totalAmount * sign : 0);
+                            }
+                        }, 0);
+                        const totalPaidCash = filteredMovements.reduce((sum, m) => {
+                            const isReturn = m.recordType.includes('مرتجع');
+                            const sign = isReturn ? -1 : 1;
+
+                            if (isPurchaseFilter) {
+                                const isPurchase = m.recordType.includes('شراء') || m.recordType.includes('صرف') || m.recordType.includes('صادر') || m.recordType.includes('مشتريات');
+                                return sum + (isPurchase ? m.paidAmount * sign : 0);
+                            } else {
+                                const isSale = m.recordType.includes('بيع') || m.recordType.includes('قبض') || m.recordType.includes('وارد') || m.recordType.includes('مبيعات');
+                                return sum + (isSale ? m.paidAmount * sign : 0);
+                            }
+                        }, 0);
+                        const totalRemaining = filteredMovements.reduce((sum, m) => {
+                            const isReturn = m.recordType.includes('مرتجع');
+                            const sign = isReturn ? -1 : 1;
+
+                            if (isPurchaseFilter) {
+                                const isPurchase = m.recordType.includes('شراء') || m.recordType.includes('صرف') || m.recordType.includes('صادر') || m.recordType.includes('مشتريات');
+                                return sum + (isPurchase ? m.remainingAmount * sign : 0);
+                            } else {
+                                const isSale = m.recordType.includes('بيع') || m.recordType.includes('قبض') || m.recordType.includes('وارد') || m.recordType.includes('مبيعات');
+                                return sum + (isSale ? m.remainingAmount * sign : 0);
+                            }
+                        }, 0);
 
                         return (
                             <>
                                 <div className="flex gap-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
                                     <div className="flex-1 bg-white p-3 rounded-lg border border-indigo-100 shadow-sm text-center">
-                                        <p className="text-xs text-indigo-600 font-bold mb-1">إجمالي الحركة المالية</p>
-                                        <p className="text-lg font-black text-indigo-700">{totalAmount.toLocaleString()}</p>
+                                        <p className="text-xs text-indigo-600 font-bold mb-1">{salesPurchasesLabel}</p>
+                                        <p className="text-lg font-black text-indigo-700">{totalSales.toLocaleString()}</p>
                                     </div>
                                     <div className="flex-1 bg-white p-3 rounded-lg border border-emerald-100 shadow-sm text-center">
-                                        <p className="text-xs text-emerald-600 font-bold mb-1">المدفوع نقداً</p>
+                                        <p className="text-xs text-emerald-600 font-bold mb-1">إجمالي المسدد</p>
                                         <p className="text-lg font-black text-emerald-700">{totalPaidCash.toLocaleString()}</p>
                                     </div>
                                     <div className="flex-1 bg-white p-3 rounded-lg border border-rose-100 shadow-sm text-center">
-                                        <p className="text-xs text-rose-600 font-bold mb-1">المتبقي الآجل</p>
+                                        <p className="text-xs text-rose-600 font-bold mb-1">إجمالي المتبقي</p>
                                         <p className="text-lg font-black text-rose-700">{totalRemaining.toLocaleString()}</p>
                                     </div>
                                 </div>
@@ -947,7 +1040,18 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
                   return false;
                 }
                 
-                if (userAssignedBoxId) {
+                const role = (currentUser?.role || '').toUpperCase().trim();
+                const isManager = role.includes('ADMIN') || 
+                                  role.includes('SUPER') || 
+                                  role.includes('OWNER') || 
+                                  role === 'مالك' || 
+                                  role === 'المدير العام' || 
+                                  role === 'مدير النظام' || 
+                                  role === 'محاسب' || 
+                                  role.includes('ACCOUNTANT') ||
+                                  role === 'MANAGER';
+
+                if (userAssignedBoxId && !isManager) {
                   return b.id === userAssignedBoxId;
                 }
                 
@@ -1004,7 +1108,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
                         الرصيد الحالي
                       </span>
                       <span className="text-2xl font-black text-slate-900 font-mono tracking-tighter">
-                        {(box.balance || 0).toLocaleString()}
+                        {(calculatedBalances[box.id!] || 0).toLocaleString()}
                         <span className="text-sm font-normal mr-2 opacity-30">
                           {box.currency}
                         </span>
@@ -1567,7 +1671,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
           
           const totalIn = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] > 0) ? curr.boxChanges[viewingBox.id] : 0), 0);
           const totalOut = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] < 0) ? Math.abs(curr.boxChanges[viewingBox.id]) : 0), 0);
-          const openingBalance = viewingBox.initialBalance !== undefined ? viewingBox.initialBalance : (viewingBox.balance || 0) - totalIn + totalOut;
+          const openingBalance = viewingBox.initialBalance !== undefined ? viewingBox.initialBalance : (calculatedBalances[viewingBox.id!] || viewingBox.balance || 0) - totalIn + totalOut;
           
           const runningBalances = new Map();
           let currentBalance = openingBalance;
@@ -1680,7 +1784,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
                 <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 flex flex-col justify-center">
                   <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-0.5">الرصيد الحالي</p>
                   <p className="text-base font-black text-slate-800 font-mono tracking-tighter">
-                    {(viewingBox.balance || 0).toLocaleString()} <span className="text-[9px] font-normal opacity-50">{viewingBox.currency}</span>
+                    {currentBalance.toLocaleString()} <span className="text-[9px] font-normal opacity-50">{viewingBox.currency}</span>
                   </p>
                 </div>
               </div>

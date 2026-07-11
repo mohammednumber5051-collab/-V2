@@ -4,6 +4,7 @@ import { Plus, Save, Trash2, Edit2, Check, ArrowRight } from "lucide-react";
 import { dbService } from "../services/db";
 import { Invoice, EntityType, Currency, PaymentType, InvoiceStatus, Customer, Supplier, CashBox } from "../types";
 import { cn } from "../lib/utils";
+import { calculateUnifiedCashBalances } from "../lib/financialUtils";
 
 interface LedgerRow {
     id: string;
@@ -32,13 +33,33 @@ export default function DailyLedger({ currentUser }: { currentUser?: any }) {
     }, []);
 
     const checkCashBoxes = async () => {
-        const boxes = await dbService.getAll("cashBoxes") as CashBox[];
-        setCashBoxes(boxes);
-        const assignedBox = currentUser?.assignedBoxId ? boxes.find(b => b.id === currentUser.assignedBoxId) : null;
+        const [boxes, txs, invs, vchs, qes] = await Promise.all([
+            dbService.getAll("cashBoxes"),
+            dbService.getAll("transactions"),
+            dbService.getAll("invoices"),
+            dbService.getAll("vouchers"),
+            dbService.getAll("quick_financial_entries")
+        ]);
+
+        const { boxBalances } = calculateUnifiedCashBalances(
+            boxes as CashBox[],
+            txs as any[],
+            invs as any[],
+            vchs as any[],
+            qes as any[]
+        );
+
+        const updatedBoxes = (boxes as CashBox[]).map(b => ({
+            ...b,
+            balance: boxBalances[b.id!] || 0
+        }));
+
+        setCashBoxes(updatedBoxes);
+        const assignedBox = currentUser?.assignedBoxId ? updatedBoxes.find(b => b.id === currentUser.assignedBoxId) : null;
         if (assignedBox) {
             setSelectedBoxId(assignedBox.id || "");
         } else {
-            const activeBox = boxes.find(b => b.isActive) || boxes[0];
+            const activeBox = updatedBoxes.find(b => b.isActive) || updatedBoxes[0];
             if (activeBox) {
                 setSelectedBoxId(activeBox.id || "");
             }

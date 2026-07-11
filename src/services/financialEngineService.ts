@@ -23,7 +23,12 @@ export class FinancialEngineService {
     }
 
     static async updateQuickEntry(oldEntry: QuickFinancialEntry, newEntry: QuickFinancialEntry, user: AppUser) {
-        await dbService.updateQuickFinancialEntry(oldEntry, newEntry);
+        await FinancialExecutionEngine.execute({
+            operationId: `update_quick_entry_${Date.now()}_${Math.random()}`,
+            type: 'UPDATE_QUICK_ENTRY',
+            payload: { oldEntry, newEntry },
+            user
+        });
         
         syncEngine.emit('ENTRY_UPDATED');
         syncEngine.emit('CASHBOX_UPDATED');
@@ -32,7 +37,12 @@ export class FinancialEngineService {
     }
 
     static async deleteQuickEntry(entry: QuickFinancialEntry, user: AppUser) {
-        await dbService.deleteQuickFinancialEntry(entry);
+        await FinancialExecutionEngine.execute({
+            operationId: `delete_quick_entry_${Date.now()}_${Math.random()}`,
+            type: 'DELETE_QUICK_ENTRY',
+            payload: { entry },
+            user
+        });
         
         syncEngine.emit('ENTRY_DELETED');
         syncEngine.emit('CASHBOX_UPDATED');

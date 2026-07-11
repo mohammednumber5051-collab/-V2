@@ -159,6 +159,18 @@ export class FinancialEngine {
         const transType: TransactionType = 
             (entry.entryType === 'manual_sale' || entry.entryType === 'receipt') ? 'قبض' : 'صرف';
 
+        // Setup custom descriptions
+        let mainDesc = `إثبات ${entry.notes || entry.entryType}`;
+        let paidDesc = `حركة نقدية - ${entry.notes || entry.entryType}`;
+
+        if (entry.entryType === 'manual_sale') {
+            mainDesc = entry.notes ? `فاتورة بيع سريع - مقابل تركيب وتغيير عدسات (${entry.notes})` : `فاتورة بيع سريع - مقابل تركيب وتغيير عدسات`;
+            paidDesc = entry.notes ? `سداد دفعة من بيع سريع (${entry.notes})` : `سداد دفعة من بيع سريع`;
+        } else if (entry.entryType === 'manual_purchase') {
+            mainDesc = entry.notes ? `فاتورة مشتريات يدوية سريعة (${entry.notes})` : `فاتورة مشتريات يدوية سريعة`;
+            paidDesc = entry.notes ? `سداد دفعة لمشتريات سريعة (${entry.notes})` : `سداد دفعة لمشتريات سريعة`;
+        }
+
         // Entry main record
         transactions.push({
             type: transType,
@@ -166,7 +178,7 @@ export class FinancialEngine {
             sourceId: entry.id || 'new',
             amount: entry.netAmount,
             currency: entry.currency,
-            description: `إثبات ${entry.notes || entry.entryType}`,
+            description: mainDesc,
             partnerId: entry.partnerId,
             partnerName: entry.partnerName,
             debit: (transType === 'قبض' ? entry.netAmount : 0),
@@ -183,7 +195,7 @@ export class FinancialEngine {
                 sourceId: entry.id || 'new',
                 amount: paid,
                 currency: entry.currency,
-                description: `حركة نقدية - ${entry.notes || entry.entryType}`,
+                description: paidDesc,
                 boxId: entry.cashBoxId,
                 partnerId: entry.partnerId,
                 partnerName: entry.partnerName,

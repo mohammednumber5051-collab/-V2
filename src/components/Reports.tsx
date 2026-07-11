@@ -10,12 +10,14 @@ import {
 import { dbService } from "../services/db";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
+import { calculateUnifiedCashBalances } from "../lib/financialUtils";
+import { CashBox, Transaction, Invoice, Voucher, QuickFinancialEntry } from "../types";
 
 export default function Reports() {
     const [dailySummaries, setDailySummaries] = useState<any[]>([]);
     const [monthlySummaries, setMonthlySummaries] = useState<any[]>([]);
-    const [dashboardCache, setDashboardCache] = useState<any>({});
     const [isLoading, setIsLoading] = useState(false);
+    const [liveStats, setLiveStats] = useState({ totalCash: 0, totalSales: 0, totalExpenses: 0, netProfit: 0 });
 
     const [timeRange, setTimeRange] = useState<'today' | 'week' | 'month' | 'year'>("month");
     const [activeTab, setActiveTab] = useState<"executive" | "sales" | "profit">("executive");
@@ -27,16 +29,48 @@ export default function Reports() {
     const loadData = async () => {
         setIsLoading(true);
         try {
-            const [dailyData, monthlyData, cacheData] = await Promise.all([
+            const [
+                dailyData, 
+                monthlyData, 
+                boxes, 
+                transactions, 
+                invoices, 
+                vouchers, 
+                quickEntries
+            ] = await Promise.all([
                 dbService.getAll("daily_financial_summaries"),
                 dbService.getAll("monthly_financial_summaries"),
-                dbService.getAll("dashboard_cache")
+                dbService.getAll("cashBoxes"),
+                dbService.getAll("transactions"),
+                dbService.getAll("invoices"),
+                dbService.getAll("vouchers"),
+                dbService.getAll("quick_financial_entries")
             ]);
             
             setDailySummaries(dailyData as any[]);
             setMonthlySummaries(monthlyData as any[]);
-            const globalCache = (cacheData as any[]).find(c => c.id === 'global') || {};
-            setDashboardCache(globalCache);
+
+            // Calculate Live Stats
+            const { totalBalance } = calculateUnifiedCashBalances(
+                boxes as CashBox[],
+                transactions as Transaction[],
+                invoices as Invoice[],
+                vouchers as Voucher[],
+                quickEntries as QuickFinancialEntry[]
+            );
+
+            // Calculate totals from daily summaries for now (or we could calculate from raw data)
+            const sales = dailyData.reduce((sum, s: any) => sum + (s.salesTotal || 0), 0);
+            const expenses = dailyData.reduce((sum, s: any) => sum + (s.expensesTotal || 0), 0);
+            const profits = dailyData.reduce((sum, s: any) => sum + (s.profitsTotal || 0), 0);
+
+            setLiveStats({
+                totalCash: totalBalance,
+                totalSales: sales,
+                totalExpenses: expenses,
+                netProfit: profits - expenses
+            });
+
         } catch (e) {
             console.error("Failed to load reports data:", e);
         } finally {
@@ -122,7 +156,7 @@ export default function Reports() {
                                         <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">إجمالي الرصيد النقدي</h3>
                                     </div>
                                     <div className="text-2xl font-black text-slate-900 dark:text-white font-mono break-all leading-none">
-                                        {(dashboardCache.totalCashBalance || 0).toLocaleString()} <span className="text-[10px] text-slate-400">YER</span>
+                                        {liveStats.totalCash.toLocaleString()} <span className="text-[10px] text-slate-400">YER</span>
                                     </div>
                                 </div>
                                 
@@ -134,7 +168,7 @@ export default function Reports() {
                                         <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">إجمالي المبيعات للتاريخ</h3>
                                     </div>
                                     <div className="text-2xl font-black text-slate-900 dark:text-white font-mono break-all leading-none">
-                                        {salesInYer.toLocaleString()} <span className="text-[10px] text-slate-400">YER</span>
+                                        {liveStats.totalSales.toLocaleString()} <span className="text-[10px] text-slate-400">YER</span>
                                     </div>
                                 </div>
 
@@ -146,7 +180,7 @@ export default function Reports() {
                                         <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">إجمالي المصروفات للتاريخ</h3>
                                     </div>
                                     <div className="text-2xl font-black text-slate-900 dark:text-white font-mono break-all leading-none">
-                                        {expensesInYer.toLocaleString()} <span className="text-[10px] text-slate-400">YER</span>
+                                        {liveStats.totalExpenses.toLocaleString()} <span className="text-[10px] text-slate-400">YER</span>
                                     </div>
                                 </div>
 
@@ -158,7 +192,7 @@ export default function Reports() {
                                         <h3 className="text-xs font-black text-emerald-50">صافي الأرباح الوظيفي</h3>
                                     </div>
                                     <div className="text-2xl font-black font-mono break-all leading-none">
-                                        {netProfitInYer.toLocaleString()} <span className="text-[10px] opacity-80">YER</span>
+                                        {liveStats.netProfit.toLocaleString()} <span className="text-[10px] opacity-80">YER</span>
                                     </div>
                                 </div>
                             </div>
