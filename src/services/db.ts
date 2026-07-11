@@ -106,10 +106,10 @@ export const dbService = {
         // Save the invoice
         batch.set(invRef, cleanData({ ...invoice, id: invRef.id, isSystemFixed: true, createdAt: new Date().toISOString() }));
         
-        // Update partner balance
+        // Update partner balance (use net amount = total - discount, minus paid)
         if (partnerId) {
             const partnerColl = type.includes('sale') ? 'customers' : 'suppliers';
-            let balChange = invoice.total - invoice.paid;
+            let balChange = (invoice.total - (invoice.discount || 0)) - invoice.paid;
             if (type.includes('return')) balChange = -balChange;
             batch.update(doc(db, partnerColl, partnerId), { balance: increment(balChange) });
         }
@@ -158,16 +158,17 @@ export const dbService = {
             batch.update(doc(db, "cashBoxes", invoice.boxId), { balance: increment(-boxChange) });
         }
 
-        // Revert partner balance
+        // Revert partner balance (use net amount = total - discount, minus paid)
         if (invoice.partnerId) {
             const partnerColl = type.includes('sale') ? 'customers' : 'suppliers';
+            const netRemaining = (invoice.total - (invoice.discount || 0)) - invoice.paid;
             let balChange = 0;
             if (isFixed) {
-                balChange = invoice.total - invoice.paid;
+                balChange = netRemaining;
                 if (type.includes('return')) balChange = -balChange;
             } else {
                 const baseType = type.replace('_return', '');
-                balChange = baseType === 'sale' ? -(invoice.total - invoice.paid) : (invoice.total - invoice.paid);
+                balChange = baseType === 'sale' ? -netRemaining : netRemaining;
                 if (type.includes('return')) balChange = -balChange;
             }
             batch.update(doc(db, partnerColl, invoice.partnerId), { balance: increment(-balChange) });
@@ -236,19 +237,20 @@ export const dbService = {
         const partnerChanges = { customers: {}, suppliers: {} };
         if (oldInvoice.partnerId) {
             const oldPartnerColl = oldType.includes('sale') ? 'customers' : 'suppliers';
+            const oldNetRemaining = (oldInvoice.total - (oldInvoice.discount || 0)) - oldInvoice.paid;
             let oldBalChange = 0;
             if (isOldFixed) {
-                oldBalChange = oldInvoice.total - oldInvoice.paid;
+                oldBalChange = oldNetRemaining;
                 if (oldType.includes('return')) oldBalChange = -oldBalChange;
             } else {
-                oldBalChange = oldBaseType === 'sale' ? -(oldInvoice.total - oldInvoice.paid) : (oldInvoice.total - oldInvoice.paid);
+                oldBalChange = oldBaseType === 'sale' ? -oldNetRemaining : oldNetRemaining;
                 if (oldType.includes('return')) oldBalChange = -oldBalChange;
             }
             partnerChanges[oldPartnerColl][oldInvoice.partnerId] = (partnerChanges[oldPartnerColl][oldInvoice.partnerId] || 0) - oldBalChange;
         }
         if (newInvoice.partnerId) {
             const newPartnerColl = newType.includes('sale') ? 'customers' : 'suppliers';
-            let newBalChange = newInvoice.total - newInvoice.paid;
+            let newBalChange = (newInvoice.total - (newInvoice.discount || 0)) - newInvoice.paid;
             if (newType.includes('return')) newBalChange = -newBalChange;
             partnerChanges[newPartnerColl][newInvoice.partnerId] = (partnerChanges[newPartnerColl][newInvoice.partnerId] || 0) + newBalChange;
         }
@@ -694,9 +696,10 @@ export const dbService = {
                 computedBoxBalances[invoice.boxId] = (computedBoxBalances[invoice.boxId] || 0) + boxChange;
             }
 
-            // Partner balance impact
+            // Partner balance impact (net = total - discount - paid)
             if (invoice.partnerId) {
-                let balChange = total - paid;
+                const discount = Number(invoice.discount || 0);
+                let balChange = (total - discount) - paid;
                 if (type.includes('return')) balChange = -balChange;
 
                 if (type.includes('sale')) {

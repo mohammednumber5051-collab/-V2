@@ -10,11 +10,12 @@ import {
 import { dbService } from "../services/db";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
+import { CashBox } from "../types";
 
 export default function Reports() {
     const [dailySummaries, setDailySummaries] = useState<any[]>([]);
     const [monthlySummaries, setMonthlySummaries] = useState<any[]>([]);
-    const [dashboardCache, setDashboardCache] = useState<any>({});
+    const [cashBoxes, setCashBoxes] = useState<CashBox[]>([]);
     const [isLoading, setIsLoading] = useState(false);
 
     const [timeRange, setTimeRange] = useState<'today' | 'week' | 'month' | 'year'>("month");
@@ -27,16 +28,15 @@ export default function Reports() {
     const loadData = async () => {
         setIsLoading(true);
         try {
-            const [dailyData, monthlyData, cacheData] = await Promise.all([
+            const [dailyData, monthlyData, boxData] = await Promise.all([
                 dbService.getAll("daily_financial_summaries"),
                 dbService.getAll("monthly_financial_summaries"),
-                dbService.getAll("dashboard_cache")
+                dbService.getAll("cashBoxes"),
             ]);
             
             setDailySummaries(dailyData as any[]);
             setMonthlySummaries(monthlyData as any[]);
-            const globalCache = (cacheData as any[]).find(c => c.id === 'global') || {};
-            setDashboardCache(globalCache);
+            setCashBoxes((boxData as CashBox[]).filter(b => b.recordStatus !== 'deleted' && b.isActive !== false));
         } catch (e) {
             console.error("Failed to load reports data:", e);
         } finally {
@@ -44,8 +44,36 @@ export default function Reports() {
         }
     };
 
+    // Live cash balance from actual cashbox documents (same as Dashboard)
+    const liveCashBalance = cashBoxes.reduce((sum, b) => sum + (Number(b.balance) || 0), 0);
+
+    // Filter daily summaries by selected time range
+    const getFilteredDailySummaries = () => {
+        const now = new Date();
+        const todayStr = now.toISOString().split('T')[0];
+        return dailySummaries.filter(s => {
+            if (!s.date) return false;
+            if (timeRange === 'today') return s.date === todayStr;
+            if (timeRange === 'week') {
+                const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+                return s.date >= weekAgo && s.date <= todayStr;
+            }
+            if (timeRange === 'month') {
+                const monthStr = todayStr.substring(0, 7);
+                return s.date.startsWith(monthStr);
+            }
+            if (timeRange === 'year') {
+                const yearStr = todayStr.substring(0, 4);
+                return s.date.startsWith(yearStr);
+            }
+            return true;
+        });
+    };
+
+    const filteredDaily = getFilteredDailySummaries();
+
     const getTimelineData = () => {
-        const sorted = [...dailySummaries].sort((a,b) => a.date.localeCompare(b.date)).slice(-7);
+        const sorted = [...filteredDaily].sort((a, b) => a.date.localeCompare(b.date)).slice(-7);
         return sorted.map(s => ({
             date: new Date(s.date).toLocaleDateString('ar-EG', { month: 'numeric', day: 'numeric' }),
             sales: s.salesTotal || 0,
@@ -56,12 +84,20 @@ export default function Reports() {
 
     const timelineData = getTimelineData();
 
-    // Summing current summaries
-    const salesInYer = dailySummaries.reduce((sum, s) => sum + (s.salesTotal || 0), 0);
-    const purchasesInYer = dailySummaries.reduce((sum, s) => sum + (s.purchasesTotal || 0), 0);
-    const expensesInYer = dailySummaries.reduce((sum, s) => sum + (s.expensesTotal || 0), 0);
-    const profitsInYer = dailySummaries.reduce((sum, s) => sum + (s.profitsTotal || 0), 0);
-    const netProfitInYer = profitsInYer - expensesInYer;
+    const salesInYer      = filteredDaily.reduce((sum, s) => sum + (s.salesTotal || 0), 0);
+    const purchasesInYer  = filteredDaily.reduce((sum, s) => sum + (s.purchasesTotal || 0), 0);
+    const expensesInYer   = filteredDaily.reduce((sum, s) => sum + (s.expensesTotal || 0), 0);
+    const profitsInYer    = filteredDaily.reduce((sum, s) => sum + (s.profitsTotal || 0), 0);
+    const receiptsInYer   = filteredDaily.reduce((sum, s) => sum + (s.receiptsTotal || 0), 0);
+    const paymentsInYer   = filteredDaily.reduce((sum, s) => sum + (s.paymentsTotal || 0), 0);
+    const netProfitInYer  = profitsInYer - expensesInYer;
+
+    const timeRangeLabel = {
+        today: 'اليوم',
+        week: 'آخر 7 أيام',
+        month: 'هذا الشهر',
+        year: 'هذه السنة',
+    }[timeRange];
 
     if (isLoading) {
         return <div className="text-center mt-10">جاري تحميل التقارير...</div>;
@@ -73,7 +109,29 @@ export default function Reports() {
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
                 <div className="relative z-10 space-y-2">
                     <h1 className="text-2xl font-black">التقارير التحليلية</h1>
-                    <p className="text-sm font-medium text-slate-400">لوحة تحكم الأداء المالي المبنية على محرك التجميع</p>
+                    <p className="text-sm font-medium text-slate-400">لوحة تحكم الأداء المالي</p>
+                </div>
+                {/* Time Range Selector */}
+                <div className="relative z-10 flex items-center gap-1 bg-white/10 p-1 rounded-2xl">
+                    {([
+                        { id: 'today', label: 'اليوم' },
+                        { id: 'week', label: '7 أيام' },
+                        { id: 'month', label: 'الشهر' },
+                        { id: 'year', label: 'السنة' },
+                    ] as const).map(r => (
+                        <button
+                            key={r.id}
+                            onClick={() => setTimeRange(r.id)}
+                            className={cn(
+                                "px-3 py-1.5 rounded-xl text-xs font-black transition-all",
+                                timeRange === r.id
+                                    ? "bg-white text-slate-900"
+                                    : "text-slate-300 hover:text-white"
+                            )}
+                        >
+                            {r.label}
+                        </button>
+                    ))}
                 </div>
             </div>
 
@@ -104,7 +162,7 @@ export default function Reports() {
 
             <AnimatePresence mode="wait">
                 <motion.div
-                    key={activeTab}
+                    key={activeTab + timeRange}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.98 }}
@@ -119,11 +177,12 @@ export default function Reports() {
                                         <div className="p-2.5 bg-blue-50 dark:bg-blue-500/10 rounded-xl text-blue-600 dark:text-blue-500">
                                             <Wallet size={20} />
                                         </div>
-                                        <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">إجمالي الرصيد النقدي</h3>
+                                        <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">الرصيد النقدي الحالي</h3>
                                     </div>
                                     <div className="text-2xl font-black text-slate-900 dark:text-white font-mono break-all leading-none">
-                                        {(dashboardCache.totalCashBalance || 0).toLocaleString()} <span className="text-[10px] text-slate-400">YER</span>
+                                        {liveCashBalance.toLocaleString()} <span className="text-[10px] text-slate-400">YER</span>
                                     </div>
+                                    <div className="text-[10px] text-slate-400 mt-1">من الصناديق الحية</div>
                                 </div>
                                 
                                 <div className="bg-white dark:bg-[#131b2e] rounded-3xl p-5 border border-slate-100 dark:border-slate-800">
@@ -131,7 +190,7 @@ export default function Reports() {
                                         <div className="p-2.5 bg-indigo-50 dark:bg-indigo-500/10 rounded-xl text-indigo-600 dark:text-indigo-500">
                                             <TrendingUp size={20} />
                                         </div>
-                                        <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">إجمالي المبيعات للتاريخ</h3>
+                                        <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">إجمالي المبيعات — {timeRangeLabel}</h3>
                                     </div>
                                     <div className="text-2xl font-black text-slate-900 dark:text-white font-mono break-all leading-none">
                                         {salesInYer.toLocaleString()} <span className="text-[10px] text-slate-400">YER</span>
@@ -143,7 +202,7 @@ export default function Reports() {
                                         <div className="p-2.5 bg-rose-50 dark:bg-rose-500/10 rounded-xl text-rose-600 dark:text-rose-500">
                                             <TrendingDown size={20} />
                                         </div>
-                                        <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">إجمالي المصروفات للتاريخ</h3>
+                                        <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">إجمالي المصروفات — {timeRangeLabel}</h3>
                                     </div>
                                     <div className="text-2xl font-black text-slate-900 dark:text-white font-mono break-all leading-none">
                                         {expensesInYer.toLocaleString()} <span className="text-[10px] text-slate-400">YER</span>
@@ -155,7 +214,7 @@ export default function Reports() {
                                         <div className="p-2.5 bg-white/20 rounded-xl text-white">
                                             <DollarSign size={20} />
                                         </div>
-                                        <h3 className="text-xs font-black text-emerald-50">صافي الأرباح الوظيفي</h3>
+                                        <h3 className="text-xs font-black text-emerald-50">صافي الأرباح — {timeRangeLabel}</h3>
                                     </div>
                                     <div className="text-2xl font-black font-mono break-all leading-none">
                                         {netProfitInYer.toLocaleString()} <span className="text-[10px] opacity-80">YER</span>
@@ -163,11 +222,29 @@ export default function Reports() {
                                 </div>
                             </div>
 
-                            {/* 7 Day Trend Block (Stubbed visual) */}
+                            {/* Secondary stats: purchases, receipts, payments */}
+                            <div className="grid grid-cols-3 gap-4">
+                                <div className="bg-white dark:bg-[#131b2e] rounded-2xl p-4 border border-slate-100 dark:border-slate-800">
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">إجمالي المشتريات</p>
+                                    <p className="text-lg font-black text-slate-900 dark:text-white font-mono">{purchasesInYer.toLocaleString()} <span className="text-[9px] text-slate-400">YER</span></p>
+                                </div>
+                                <div className="bg-white dark:bg-[#131b2e] rounded-2xl p-4 border border-slate-100 dark:border-slate-800">
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">إجمالي المقبوضات</p>
+                                    <p className="text-lg font-black text-emerald-600 font-mono">{receiptsInYer.toLocaleString()} <span className="text-[9px] text-slate-400">YER</span></p>
+                                </div>
+                                <div className="bg-white dark:bg-[#131b2e] rounded-2xl p-4 border border-slate-100 dark:border-slate-800">
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">إجمالي المدفوعات</p>
+                                    <p className="text-lg font-black text-rose-600 font-mono">{paymentsInYer.toLocaleString()} <span className="text-[9px] text-slate-400">YER</span></p>
+                                </div>
+                            </div>
+
+                            {/* 7 Day Trend Block */}
                             <div className="bg-white dark:bg-[#131b2e] rounded-[2rem] border border-slate-100 dark:border-slate-800 p-6">
-                                <h3 className="text-sm font-black text-slate-900 dark:text-white mb-6">مؤشر مبيعات ومصروفات السبعة أيام الأخيرة</h3>
+                                <h3 className="text-sm font-black text-slate-900 dark:text-white mb-6">مؤشر المبيعات والمصروفات — آخر 7 أيام من الفترة المختارة</h3>
                                 <div className="h-64 flex items-end justify-between gap-1 w-full relative">
-                                    {timelineData.map((d, i) => {
+                                    {timelineData.length === 0 ? (
+                                        <div className="w-full flex items-center justify-center text-slate-400 text-sm font-bold">لا توجد بيانات للفترة المختارة</div>
+                                    ) : timelineData.map((d, i) => {
                                         const maxVal = Math.max(...timelineData.map(t => Math.max(t.sales, t.expenses, 1)));
                                         const hSales = (d.sales / maxVal) * 100;
                                         const hExp = (d.expenses / maxVal) * 100;
@@ -182,28 +259,105 @@ export default function Reports() {
                                         )
                                     })}
                                 </div>
+                                <div className="flex items-center gap-4 mt-4 justify-center">
+                                    <div className="flex items-center gap-1.5"><div className="w-3 h-3 bg-indigo-500 rounded-sm"/><span className="text-[10px] font-bold text-slate-500">مبيعات</span></div>
+                                    <div className="flex items-center gap-1.5"><div className="w-3 h-3 bg-rose-400 rounded-sm"/><span className="text-[10px] font-bold text-slate-500">مصروفات</span></div>
+                                </div>
                             </div>
                         </div>
                     )}
 
                     {activeTab === 'sales' && (
                         <div className="space-y-6">
-                            <div className="bg-white dark:bg-[#131b2e] rounded-3xl p-6 border border-slate-100 dark:border-slate-800 flex items-center justify-center min-h-[300px]">
-                                <p className="text-slate-500 text-sm font-bold flex flex-col items-center gap-4">
-                                    <TrendingUp size={48} className="text-indigo-400 opacity-50"/>
-                                    هذه الصفحة ستستخدم جداول المبيعات الشهرية والمجمعة (المرحلة القادمة)
-                                </p>
+                            {/* Sales breakdown by month from monthly summaries */}
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="bg-white dark:bg-[#131b2e] rounded-3xl p-5 border border-slate-100 dark:border-slate-800">
+                                    <p className="text-xs font-black text-slate-400 mb-3">إجمالي المبيعات — {timeRangeLabel}</p>
+                                    <p className="text-3xl font-black text-indigo-600 font-mono">{salesInYer.toLocaleString()}</p>
+                                    <p className="text-[10px] text-slate-400 mt-1">YER</p>
+                                </div>
+                                <div className="bg-white dark:bg-[#131b2e] rounded-3xl p-5 border border-slate-100 dark:border-slate-800">
+                                    <p className="text-xs font-black text-slate-400 mb-3">إجمالي المشتريات — {timeRangeLabel}</p>
+                                    <p className="text-3xl font-black text-rose-500 font-mono">{purchasesInYer.toLocaleString()}</p>
+                                    <p className="text-[10px] text-slate-400 mt-1">YER</p>
+                                </div>
+                            </div>
+                            <div className="bg-white dark:bg-[#131b2e] rounded-[2rem] border border-slate-100 dark:border-slate-800 p-6 overflow-x-auto">
+                                <h3 className="text-sm font-black text-slate-900 dark:text-white mb-4">تفاصيل الأيام — {timeRangeLabel}</h3>
+                                <table className="w-full text-sm min-w-[400px]">
+                                    <thead>
+                                        <tr className="text-[10px] font-black text-slate-400 uppercase border-b border-slate-100">
+                                            <th className="pb-2 text-right">التاريخ</th>
+                                            <th className="pb-2 text-left">مبيعات</th>
+                                            <th className="pb-2 text-left">مشتريات</th>
+                                            <th className="pb-2 text-left">مقبوضات</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-50">
+                                        {[...filteredDaily].sort((a,b) => b.date.localeCompare(a.date)).map((s, i) => (
+                                            <tr key={i} className="text-xs">
+                                                <td className="py-2 font-bold text-slate-600">{s.date}</td>
+                                                <td className="py-2 font-mono text-indigo-600 text-left">{(s.salesTotal || 0).toLocaleString()}</td>
+                                                <td className="py-2 font-mono text-rose-500 text-left">{(s.purchasesTotal || 0).toLocaleString()}</td>
+                                                <td className="py-2 font-mono text-emerald-600 text-left">{(s.receiptsTotal || 0).toLocaleString()}</td>
+                                            </tr>
+                                        ))}
+                                        {filteredDaily.length === 0 && (
+                                            <tr><td colSpan={4} className="py-8 text-center text-slate-400 font-bold">لا توجد بيانات للفترة المختارة</td></tr>
+                                        )}
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     )}
 
                     {activeTab === 'profit' && (
                         <div className="space-y-6">
-                            <div className="bg-white dark:bg-[#131b2e] rounded-3xl p-6 border border-slate-100 dark:border-slate-800 flex items-center justify-center min-h-[300px]">
-                                <p className="text-slate-500 text-sm font-bold flex flex-col items-center gap-4">
-                                    <Wallet size={48} className="text-emerald-400 opacity-50"/>
-                                    هذه الصفحة ستعرض الأرباح التفصيلية المعتمدة على تقارير الأرباح المجمعة
-                                </p>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="bg-white dark:bg-[#131b2e] rounded-3xl p-5 border border-slate-100 dark:border-slate-800">
+                                    <p className="text-xs font-black text-slate-400 mb-3">إجمالي الأرباح — {timeRangeLabel}</p>
+                                    <p className="text-3xl font-black text-emerald-600 font-mono">{profitsInYer.toLocaleString()}</p>
+                                    <p className="text-[10px] text-slate-400 mt-1">YER (مبيعات - تكلفة)</p>
+                                </div>
+                                <div className="bg-white dark:bg-[#131b2e] rounded-3xl p-5 border border-slate-100 dark:border-slate-800">
+                                    <p className="text-xs font-black text-slate-400 mb-3">إجمالي المصروفات — {timeRangeLabel}</p>
+                                    <p className="text-3xl font-black text-rose-500 font-mono">{expensesInYer.toLocaleString()}</p>
+                                    <p className="text-[10px] text-slate-400 mt-1">YER</p>
+                                </div>
+                            </div>
+                            <div className={cn("rounded-3xl p-5 text-white", netProfitInYer >= 0 ? "bg-emerald-500" : "bg-rose-500")}>
+                                <p className="text-xs font-black opacity-80 mb-2">صافي الربح التشغيلي — {timeRangeLabel}</p>
+                                <p className="text-4xl font-black font-mono">{netProfitInYer.toLocaleString()} <span className="text-sm opacity-70">YER</span></p>
+                                <p className="text-[10px] opacity-70 mt-1">= أرباح المبيعات − المصروفات</p>
+                            </div>
+                            <div className="bg-white dark:bg-[#131b2e] rounded-[2rem] border border-slate-100 dark:border-slate-800 p-6 overflow-x-auto">
+                                <h3 className="text-sm font-black text-slate-900 dark:text-white mb-4">تفاصيل أرباح الأيام — {timeRangeLabel}</h3>
+                                <table className="w-full text-sm min-w-[400px]">
+                                    <thead>
+                                        <tr className="text-[10px] font-black text-slate-400 uppercase border-b border-slate-100">
+                                            <th className="pb-2 text-right">التاريخ</th>
+                                            <th className="pb-2 text-left">أرباح</th>
+                                            <th className="pb-2 text-left">مصروفات</th>
+                                            <th className="pb-2 text-left">صافي</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-50">
+                                        {[...filteredDaily].sort((a,b) => b.date.localeCompare(a.date)).map((s, i) => {
+                                            const net = (s.profitsTotal || 0) - (s.expensesTotal || 0);
+                                            return (
+                                                <tr key={i} className="text-xs">
+                                                    <td className="py-2 font-bold text-slate-600">{s.date}</td>
+                                                    <td className="py-2 font-mono text-emerald-600 text-left">{(s.profitsTotal || 0).toLocaleString()}</td>
+                                                    <td className="py-2 font-mono text-rose-500 text-left">{(s.expensesTotal || 0).toLocaleString()}</td>
+                                                    <td className={cn("py-2 font-mono font-black text-left", net >= 0 ? "text-emerald-700" : "text-rose-700")}>{net.toLocaleString()}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                        {filteredDaily.length === 0 && (
+                                            <tr><td colSpan={4} className="py-8 text-center text-slate-400 font-bold">لا توجد بيانات للفترة المختارة</td></tr>
+                                        )}
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     )}
