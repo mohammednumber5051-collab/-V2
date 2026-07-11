@@ -360,7 +360,9 @@ export const dbService = {
         } else {
             if (trans.partnerId) {
                 const partnerColl = (trans.type === "قبض" || trans.type === "customer_receipt") ? "customers" : "suppliers";
-                batch.update(doc(db, partnerColl, trans.partnerId), { balance: increment(trans.amount) });
+                // Reverse the original addTransaction sign: قبض added -amount, so reversal adds +amount; صرف added +amount, so reversal adds -amount
+                const revertSign = (trans.type === "قبض" || trans.type === "customer_receipt") ? trans.amount : -trans.amount;
+                batch.update(doc(db, partnerColl, trans.partnerId), { balance: increment(revertSign) });
             }
             if (trans.boxId) {
                 const change = (trans.type === "قبض" || trans.type === "customer_receipt") ? trans.amount : -trans.amount;
@@ -467,7 +469,8 @@ export const dbService = {
             if (voucher.partnerType === 'customer') {
                 balChange = voucher.type === 'receipt' ? -voucher.amount : voucher.amount;
             } else {
-                balChange = -voucher.amount;
+                // Supplier: payment reduces payables (-), receipt from supplier increases payables (+)
+                balChange = voucher.type === 'payment' ? -voucher.amount : voucher.amount;
             }
             batch.update(doc(db, partnerColl, voucher.partnerId), {
                 balance: increment(balChange)
@@ -506,7 +509,8 @@ export const dbService = {
             if (oldVoucher.partnerType === 'customer') {
                 oldBalChange = oldVoucher.type === 'receipt' ? -oldVoucher.amount : oldVoucher.amount;
             } else {
-                oldBalChange = -oldVoucher.amount;
+                // Supplier: payment reduces payables (-), receipt from supplier increases payables (+)
+                oldBalChange = oldVoucher.type === 'payment' ? -oldVoucher.amount : oldVoucher.amount;
             }
             batch.update(doc(db, partnerColl, oldVoucher.partnerId), {
                 balance: increment(-oldBalChange)
@@ -519,7 +523,8 @@ export const dbService = {
             if (newVoucher.partnerType === 'customer') {
                 newBalChange = newVoucher.type === 'receipt' ? -newVoucher.amount : newVoucher.amount;
             } else {
-                newBalChange = -newVoucher.amount;
+                // Supplier: payment reduces payables (-), receipt from supplier increases payables (+)
+                newBalChange = newVoucher.type === 'payment' ? -newVoucher.amount : newVoucher.amount;
             }
             batch.update(doc(db, partnerColl, newVoucher.partnerId), {
                 balance: increment(newBalChange)
@@ -542,7 +547,8 @@ export const dbService = {
             if (voucher.partnerType === 'customer') {
                 balChange = voucher.type === 'receipt' ? -voucher.amount : voucher.amount;
             } else {
-                balChange = -voucher.amount;
+                // Supplier: payment reduces payables (-), receipt from supplier increases payables (+)
+                balChange = voucher.type === 'payment' ? -voucher.amount : voucher.amount;
             }
             batch.update(doc(db, partnerColl, voucher.partnerId), {
                 balance: increment(-balChange)
