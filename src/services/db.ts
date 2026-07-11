@@ -582,14 +582,20 @@ export const dbService = {
     async recalculateFinancials() {
         const batch = writeBatch(db);
         
-        // Fetch all invoices, customers, suppliers, products, and cashboxes, transactions, and vouchers
-        const invoicesSnap = await getDocs(collection(db, "invoices"));
-        const customersSnap = await getDocs(collection(db, "customers"));
-        const suppliersSnap = await getDocs(collection(db, "suppliers"));
-        const productsSnap = await getDocs(collection(db, "products"));
-        const cashBoxesSnap = await getDocs(collection(db, "cashBoxes"));
-        const transactionsSnap = await getDocs(collection(db, "transactions"));
-        const vouchersSnap = await getDocs(collection(db, "vouchers"));
+        // Fetch all source documents needed for recalculation
+        const [
+            invoicesSnap, customersSnap, suppliersSnap, productsSnap,
+            cashBoxesSnap, transactionsSnap, vouchersSnap, quickEntriesSnap
+        ] = await Promise.all([
+            getDocs(collection(db, "invoices")),
+            getDocs(collection(db, "customers")),
+            getDocs(collection(db, "suppliers")),
+            getDocs(collection(db, "products")),
+            getDocs(collection(db, "cashBoxes")),
+            getDocs(collection(db, "transactions")),
+            getDocs(collection(db, "vouchers")),
+            getDocs(collection(db, "quick_financial_entries")),
+        ]);
 
         const invoices = invoicesSnap.docs.map(d => ({ ...d.data(), id: d.id } as any));
         const customers = customersSnap.docs.map(d => ({ ...d.data(), id: d.id } as any));
@@ -598,6 +604,7 @@ export const dbService = {
         const cashBoxes = cashBoxesSnap.docs.map(d => ({ ...d.data(), id: d.id } as any));
         const transactions = transactionsSnap.docs.map(d => ({ ...d.data(), id: d.id } as any));
         const vouchers = vouchersSnap.docs.map(d => ({ ...d.data(), id: d.id } as any));
+        const quickEntries = quickEntriesSnap.docs.map(d => ({ ...d.data(), id: d.id } as any));
 
         let docsUpdatedCount = 0;
 
@@ -710,9 +717,40 @@ export const dbService = {
             }
         }
 
-        // 4. Process Transactions
+        // 4. Process Quick Financial Entries
+        // (partner balance = remainingAmount, cashbox = paidAmount — read directly from source)
+        for (const entry of quickEntries) {
+            if (entry.recordStatus === 'deleted') continue;
+
+            const paidAmount = Number(entry.paidAmount || 0);
+            const remainingAmount = Number(entry.remainingAmount || 0);
+            const isIncoming = entry.entryType === 'manual_sale' || entry.entryType === 'receipt';
+
+            // CashBox impact
+            if (entry.cashBoxId && paidAmount > 0) {
+                const boxChange = isIncoming ? paidAmount : -paidAmount;
+                computedBoxBalances[entry.cashBoxId] = (computedBoxBalances[entry.cashBoxId] || 0) + boxChange;
+            }
+
+            // Partner balance impact
+            if (entry.partnerId && entry.partnerType !== 'none' && remainingAmount !== 0) {
+                const partnerColl = isIncoming ? 'customers' : 'suppliers';
+                if (partnerColl === 'customers') {
+                    computedCustomerBalances[entry.partnerId] = (computedCustomerBalances[entry.partnerId] || 0) + remainingAmount;
+                } else {
+                    computedSupplierBalances[entry.partnerId] = (computedSupplierBalances[entry.partnerId] || 0) + remainingAmount;
+                }
+            }
+        }
+
+        // 5. Process standalone Transactions only (skip auto-generated ones from invoices/quick entries)
+        // Auto-generated transactions have a non-empty sourceId; their impacts are already
+        // counted from their source documents (invoices, quick entries) above.
+        // Only include: transfers, and manually-added transactions (no sourceId).
         for (const trans of transactions) {
             if (trans.recordStatus === 'deleted') continue;
+            // Skip auto-generated transactions — sourceId links them to an invoice or quick entry
+            if (trans.sourceId && trans.type !== 'تحويل') continue;
 
             const type = trans.type || '';
             const amount = Number(trans.amount || 0);
@@ -730,8 +768,8 @@ export const dbService = {
                 computedBoxBalances[trans.boxId] = (computedBoxBalances[trans.boxId] || 0) + boxChange;
             }
 
-            // Partner balance impact
-            if (trans.partnerId) {
+            // Partner balance impact (only for manual standalone transactions)
+            if (trans.partnerId && type !== 'تحويل') {
                 const isCustomer = type.includes('customer') || type === 'قبض';
                 const balChange = (type.includes('قبض') || type === 'customer_receipt') ? -amount : amount;
 
@@ -743,7 +781,7 @@ export const dbService = {
             }
         }
 
-        // 5. Process Vouchers (receipts/payments)
+        // 6. Process Vouchers (receipts/payments) — cashbox and partner balance
         for (const voucher of vouchers) {
             if (voucher.recordStatus === 'deleted') continue;
 
@@ -756,13 +794,15 @@ export const dbService = {
                 computedBoxBalances[voucher.boxId] = (computedBoxBalances[voucher.boxId] || 0) + boxChange;
             }
 
-            // Partner balance impact
+            // Partner balance impact (matches addVoucher / updateVoucher logic in db.ts)
             if (voucher.partnerId && voucher.partnerType && voucher.partnerType !== 'none') {
+                // receipt = we received money → customer balance -amount, supplier balance +amount
+                // payment = we paid money → customer balance +amount, supplier balance -amount
                 if (voucher.partnerType === 'customer') {
                     const balChange = type === 'receipt' ? -amount : amount;
                     computedCustomerBalances[voucher.partnerId] = (computedCustomerBalances[voucher.partnerId] || 0) + balChange;
                 } else if (voucher.partnerType === 'supplier') {
-                    const balChange = -amount;
+                    const balChange = type === 'receipt' ? amount : -amount;
                     computedSupplierBalances[voucher.partnerId] = (computedSupplierBalances[voucher.partnerId] || 0) + balChange;
                 }
             }
