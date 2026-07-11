@@ -180,7 +180,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
         const [invs, vchs, qes, txs, boxes] = await Promise.all([
             dbService.getAll("invoices"),
             dbService.getAll("vouchers"),
-            dbService.getAll("quickEntries"),
+            dbService.getAll("quick_financial_entries"),
             dbService.getAll("transactions"),
             dbService.getAll("cashBoxes")
         ]);
@@ -259,7 +259,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
                 recordType: qe.entryType === 'manual_sale' ? 'فاتورة بيع (سريع)' : qe.entryType === 'manual_purchase' ? 'فاتورة شراء (سريع)' : qe.entryType === 'receipt' ? 'سند قبض (سريع)' : qe.entryType === 'payment' ? 'سند صرف (سريع)' : 'تسوية',
                 paymentType: qe.paymentStatus === 'مدفوع' ? 'نقدا' : qe.paymentStatus === 'آجل' ? 'اجل' : 'جزئي',
                 partnerName: qe.partnerName || 'عام',
-                totalAmount: qe.amount || 0,
+                totalAmount: qe.netAmount ?? qe.amount ?? 0,
                 discount: qe.discount || 0,
                 paidAmount: qe.paidAmount || 0,
                 remainingAmount: qe.remainingAmount || 0,
