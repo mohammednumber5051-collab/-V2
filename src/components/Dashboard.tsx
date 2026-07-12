@@ -68,14 +68,8 @@ export default function Dashboard({ onNavigate, currentUser }: { onNavigate?: (p
                 const dashCache = await dbService.getAll("dashboard_cache");
                 const globalCache = dashCache.find(c => c.id === 'global') || {};
                 
-                // Fetch cash boxes and all movements directly for exact live calculation
-                const [cashBoxes, txs, invs, vchs, qes] = await Promise.all([
-                    dbService.getAll("cashBoxes"),
-                    dbService.getAll("transactions"),
-                    dbService.getAll("invoices"),
-                    dbService.getAll("vouchers"),
-                    dbService.getAll("quick_financial_entries")
-                ]);
+                // Fetch cash boxes directly
+                const cashBoxes = await dbService.getAll("cashBoxes");
                 
                 const hasViewBalancePermission = hasPermission(currentUser, 'view_cash_balance');
                 const userAssignedBoxId = currentUser?.assignedBoxId;
@@ -93,13 +87,14 @@ export default function Dashboard({ onNavigate, currentUser }: { onNavigate?: (p
                                       role.includes('ACCOUNTANT') ||
                                       role === 'MANAGER';
 
-                    const { boxBalances, totalBalance } = calculateUnifiedCashBalances(
-                        cashBoxes as CashBox[],
-                        txs as any[],
-                        invs as any[],
-                        vchs as any[],
-                        qes as any[]
-                    );
+                    let totalBalance = 0;
+                    const boxBalances: Record<string, number> = {};
+                    (cashBoxes as CashBox[]).forEach((b) => {
+                        if (b.recordStatus !== 'deleted' && b.isActive !== false) {
+                            totalBalance += (b.balance || 0);
+                        }
+                        boxBalances[b.id!] = (b.balance || 0);
+                    });
 
                     if (userAssignedBoxId && !isManager) {
                         finalBalance = boxBalances[userAssignedBoxId] || 0;

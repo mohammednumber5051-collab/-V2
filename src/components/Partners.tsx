@@ -150,15 +150,12 @@ export default function Partners({ type }: PartnersProps) {
     };
 
     const partnerTotalsMap = React.useMemo(() => {
-        return calculateUnifiedPartnerBalances(
-            partners,
-            allTransactions,
-            invoices,
-            vouchers,
-            quickEntries,
-            type
-        );
-    }, [partners, allTransactions, invoices, vouchers, quickEntries, type]);
+        const map: Record<string, { total: number, paid: number, remaining: number }> = {};
+        partners.forEach(p => {
+            map[p.id!] = { total: 0, paid: 0, remaining: p.balance || 0 };
+        });
+        return map;
+    }, [partners]);
 
     const getPartnerTotals = (partnerId: string) => {
         return partnerTotalsMap[partnerId] || { total: 0, paid: 0, remaining: 0 };

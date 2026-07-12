@@ -2,6 +2,7 @@ import { app, auth, db, collection, addDoc, updateDoc, deleteDoc, doc, setDoc, g
 import { authService } from "./authService";
 import { syncEngine } from "./syncEngine";
 import { localDbService } from "./localDb";
+import { FinancialExecutionEngine } from "./financialExecutionEngine";
 import { StoreSettings } from "../types";
 
 export const cleanData = (obj: any): any => {
@@ -568,9 +569,10 @@ export const dbService = {
             await addDoc(collection(db, "settings"), cleanData(data));
         }
     },
-    async createQuickFinancialEntry(entry) { return "1"; },
     async recalculateFinancials() {
-        return await FinancialExecutionEngine.rebuildFinancialState();
+        const result = await FinancialExecutionEngine.rebuildFinancialState();
+        await localDbService.clearLocalData();
+        return result;
     },
     async resetAllFinancialData() {
         // Clear EVERYTHING in localStorage

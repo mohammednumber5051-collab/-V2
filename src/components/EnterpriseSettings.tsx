@@ -27,6 +27,7 @@ import { dbService } from "../services/db";
 import { migrationService } from "../services/migration";
 import { BackupRecord } from "../types";
 import { cn } from "../lib/utils";
+import { calculateUnifiedCashBalances } from "../lib/financialUtils";
 import StoreSettingsForm from "./StoreSettingsForm";
 
 type SettingsTab = 'store' | 'system' | 'about';
@@ -45,6 +46,83 @@ export default function EnterpriseSettings() {
     const [migrationNeeded, setMigrationNeeded] = useState(false);
     const [restoreProgress, setRestoreProgress] = useState("");
     const [activeMainTab, setActiveMainTab] = useState<SettingsTab>('store');
+
+    // Audit tool state
+    const [auditClicks, setAuditClicks] = useState(0);
+    const [showAuditTool, setShowAuditTool] = useState(false);
+    const [isAuditing, setIsAuditing] = useState(false);
+    const [auditResults, setAuditResults] = useState<{ id: string, name: string, current: number, calculated: number }[]>([]);
+
+    const handleTitleClick = () => {
+        setAuditClicks(prev => {
+            if (prev + 1 >= 5) {
+                setShowAuditTool(true);
+                return 0;
+            }
+            return prev + 1;
+        });
+    };
+
+    const runAudit = async () => {
+        setIsAuditing(true);
+        try {
+            const [boxes, txs, invs, vchs, qes] = await Promise.all([
+                dbService.getAll("cashBoxes"),
+                dbService.getAll("transactions"),
+                dbService.getAll("invoices"),
+                dbService.getAll("vouchers"),
+                dbService.getAll("quick_financial_entries")
+            ]);
+
+            const { boxBalances } = calculateUnifiedCashBalances(
+                boxes as any[],
+                txs as any[],
+                invs as any[],
+                vchs as any[],
+                qes as any[]
+            );
+
+            const mismatches = [];
+            for (const box of (boxes as any[])) {
+                const calculated = boxBalances[box.id] || 0;
+                const current = box.balance || 0;
+                if (Math.abs(calculated - current) > 0.001) {
+                    mismatches.push({
+                        id: box.id,
+                        name: box.name,
+                        current,
+                        calculated
+                    });
+                }
+            }
+            setAuditResults(mismatches);
+            if (mismatches.length === 0) {
+                alert("جميع أرصدة الصناديق مطابقة ومضبوطة بشكل صحيح.");
+            }
+        } catch (error) {
+            console.error("Audit error:", error);
+            alert("فشل إجراء التدقيق");
+        } finally {
+            setIsAuditing(false);
+        }
+    };
+
+    const fixAuditMismatches = async () => {
+        if (!window.confirm("هل أنت متأكد من تصحيح الأرصدة المتعارضة؟ سيتم تحديث الأرصدة الحالية في قاعدة البيانات لتتطابق مع العمليات المسجلة.")) return;
+        setIsAuditing(true);
+        try {
+            for (const mismatch of auditResults) {
+                await dbService.update("cashBoxes", mismatch.id, { balance: mismatch.calculated });
+            }
+            alert("تم تصحيح الأرصدة بنجاح.");
+            setAuditResults([]);
+        } catch (error) {
+            console.error("Fix error:", error);
+            alert("فشل تصحيح الأرصدة");
+        } finally {
+            setIsAuditing(false);
+        }
+    };
 
     // Auto Backup Settings State
     const [autoBackupEnabled, setAutoBackupEnabled] = useState(() => localStorage.getItem("autoBackupEnabled") === "true");
@@ -227,6 +305,7 @@ export default function EnterpriseSettings() {
             await dbService.recalculateFinancials();
             alert("تمت إعادة حساب الأرصدة والتقارير بنجاح!");
             setShowRecalculateConfirm(false);
+            window.location.reload();
         } catch (e: any) {
             console.error("Recalculate error:", e);
             alert(e.message || "فشلت عملية إعادة الحساب.");
@@ -254,7 +333,10 @@ export default function EnterpriseSettings() {
         <div className="space-y-6 pb-20 max-w-5xl mx-auto">
             <div className="bg-white dark:bg-[#131b2e] p-3.5 rounded-2xl border border-slate-100 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-colors">
                 <div className="flex items-center gap-4">
-                    <div className="p-3.5 bg-blue-50 dark:bg-blue-500/10 rounded-2xl text-blue-600 dark:text-blue-400">
+                    <div 
+                        className="p-3.5 bg-blue-50 dark:bg-blue-500/10 rounded-2xl text-blue-600 dark:text-blue-400 cursor-pointer"
+                        onClick={handleTitleClick}
+                    >
                         <Settings className="animate-spin-slow" size={24} />
                     </div>
                     <div>
@@ -521,6 +603,53 @@ export default function EnterpriseSettings() {
                                 </table>
                             </div>
                         </div>
+
+                        {showAuditTool && (
+                            <div className="bg-white dark:bg-[#131b2e] rounded-2xl border border-blue-500/30 p-4 lg:col-span-2 space-y-4 animate-fade-up">
+                                <div className="flex items-center gap-2 mb-2 text-blue-600 dark:text-blue-400">
+                                    <Shield size={18} />
+                                    <h3 className="font-black">أداة تدقيق الأرصدة المخفية</h3>
+                                </div>
+                                <p className="text-sm text-slate-600 dark:text-slate-300">هذه الأداة تقوم بمقارنة أرصدة الصناديق الحالية مع مجموع العمليات المالية المسجلة فعلياً.</p>
+                                
+                                <div className="flex gap-2">
+                                    <button 
+                                        onClick={runAudit} 
+                                        disabled={isAuditing}
+                                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-black transition-colors hover:bg-blue-700 disabled:opacity-50"
+                                    >
+                                        <Activity size={14} className={isAuditing ? "animate-spin" : ""} />
+                                        <span>فحص الأرصدة الآن</span>
+                                    </button>
+                                </div>
+
+                                {auditResults.length > 0 && (
+                                    <div className="mt-4 border border-rose-200 dark:border-rose-900 rounded-xl overflow-hidden bg-rose-50/50 dark:bg-rose-900/10">
+                                        <div className="p-3 bg-rose-100 dark:bg-rose-900/30 font-bold text-rose-700 dark:text-rose-400 text-sm flex justify-between items-center">
+                                            <span>تم اكتشاف {auditResults.length} تعارض</span>
+                                            <button 
+                                                onClick={fixAuditMismatches}
+                                                disabled={isAuditing}
+                                                className="px-3 py-1 bg-rose-600 text-white rounded-lg text-xs hover:bg-rose-700 disabled:opacity-50"
+                                            >
+                                                تصحيح الكل تلقائياً
+                                            </button>
+                                        </div>
+                                        <div className="p-3 space-y-2">
+                                            {auditResults.map(res => (
+                                                <div key={res.id} className="flex justify-between items-center text-sm p-2 bg-white dark:bg-slate-800 rounded-lg border border-slate-100 dark:border-slate-700">
+                                                    <span className="font-bold">{res.name}</span>
+                                                    <div className="text-left">
+                                                        <div className="text-rose-600 dark:text-rose-400 font-mono text-xs">الحالي: {res.current.toLocaleString()}</div>
+                                                        <div className="text-emerald-600 dark:text-emerald-400 font-mono text-xs">الصحيح: {res.calculated.toLocaleString()}</div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
             ) : (

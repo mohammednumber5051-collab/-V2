@@ -41,17 +41,9 @@ export default function DailyLedger({ currentUser }: { currentUser?: any }) {
             dbService.getAll("quick_financial_entries")
         ]);
 
-        const { boxBalances } = calculateUnifiedCashBalances(
-            boxes as CashBox[],
-            txs as any[],
-            invs as any[],
-            vchs as any[],
-            qes as any[]
-        );
-
         const updatedBoxes = (boxes as CashBox[]).map(b => ({
             ...b,
-            balance: boxBalances[b.id!] || 0
+            balance: b.balance || 0
         }));
 
         setCashBoxes(updatedBoxes);

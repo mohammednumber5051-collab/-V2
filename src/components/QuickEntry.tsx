@@ -212,13 +212,10 @@ export default function QuickEntry({ onNavigate, editId, currentUser: propCurren
                     dbService.getAll("quick_financial_entries")
                 ]);
 
-                const { boxBalances } = calculateUnifiedCashBalances(
-                    boxes as CashBox[],
-                    txs as any[],
-                    invs as any[],
-                    vchs as any[],
-                    qes as any[]
-                );
+                const boxBalances: Record<string, number> = {};
+                (boxes as CashBox[]).forEach((b) => {
+                    boxBalances[b.id!] = (b.balance || 0);
+                });
                 setCalculatedBalances(boxBalances);
 
                 setCashBoxes(boxes as CashBox[]);

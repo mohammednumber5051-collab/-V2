@@ -1,5 +1,6 @@
 import { db, doc, collection, increment, runTransaction, getDocs, query, writeBatch, where } from "../firebase";
 import { AggregationEngine, AggregationImpact } from "./aggregationEngine";
+import { calculateUnifiedCashBalances } from "../lib/financialUtils";
 import { FinancialEngine as OldFinancialEngine } from "./financialEngine";
 
 // local cleanData function since db.ts doesn't export it
@@ -429,92 +430,37 @@ export class FinancialExecutionEngine {
         const vouchers = allVch.docs.map(d => ({ ...d.data(), id: d.id }));
         const quickEntries = allQE.docs.map(d => ({ ...d.data(), id: d.id }));
 
-        // 2. Use the same logic as calculateUnifiedCashBalances to get the truth
-        // We need to import it or recreate it here. Since this is server-side-ish (it's a service), 
-        // we'll implement the logic directly to avoid circular imports or dependency issues.
-        
-        const boxBalances: Record<string, number> = {};
-        boxes.forEach((b: any) => {
-            boxBalances[b.id] = Number(b.initialBalance || 0);
-        });
-
-        // Track cash from transactions to avoid double counting with invoices/QEs
-        const invoiceCashFromTransactions: Record<string, number> = {};
-        const qeCashFromTransactions: Record<string, number> = {};
-
-        // Vouchers
-        vouchers.forEach((vch: any) => {
-            if (vch.recordStatus === 'deleted' || !vch.boxId) return;
-            const amt = Number(vch.amount || 0);
-            boxBalances[vch.boxId] += (vch.type === 'receipt' ? amt : -amt);
-        });
-
-        // Transactions
-        transactions.forEach((tx: any) => {
-            if (tx.recordStatus === 'deleted') return;
-            if (tx.sourceType === 'sales_invoice' || tx.sourceType === 'purchase_invoice' || tx.sourceType === 'quick_financial_entry') return;
-
-            const amt = Number(tx.amount || 0);
-            if (tx.sourceId) {
-                if (tx.sourceType === 'invoice_payment' || tx.sourceType === 'manual_receipt' || tx.sourceType === 'manual_payment') {
-                    invoiceCashFromTransactions[tx.sourceId] = (invoiceCashFromTransactions[tx.sourceId] || 0) + amt;
-                    qeCashFromTransactions[tx.sourceId] = (qeCashFromTransactions[tx.sourceId] || 0) + amt;
-                }
-            }
-
-            if (tx.type === 'تحويل') {
-                if (tx.fromBoxId) boxBalances[tx.fromBoxId] -= amt;
-                if (tx.toBoxId) boxBalances[tx.toBoxId] += amt;
-            } else if (tx.boxId) {
-                const change = (tx.type === 'قبض' || tx.type === 'customer_receipt') ? amt : -amt;
-                boxBalances[tx.boxId] += change;
-            }
-        });
-
-        // Invoices (Extra cash)
-        invoices.forEach((inv: any) => {
-            if (inv.recordStatus === 'deleted' || !inv.boxId) return;
-            const totalPaid = Number(inv.paid || 0);
-            const inTrans = invoiceCashFromTransactions[inv.id!] || 0;
-            const unrecorded = Math.max(0, totalPaid - inTrans);
-            if (unrecorded > 0) {
-                const isReturn = (inv.type || '').includes('return');
-                const isSale = (inv.type || '').includes('sale');
-                let change = isSale ? unrecorded : -unrecorded;
-                if (isReturn) change = -change;
-                boxBalances[inv.boxId] += change;
-            }
-        });
-
-        // Quick Entries (Extra cash)
-        quickEntries.forEach((qe: any) => {
-            if (qe.recordStatus === 'deleted' || !qe.cashBoxId) return;
-            const totalPaid = Number(qe.paidAmount || 0);
-            const inTrans = qeCashFromTransactions[qe.id!] || 0;
-            const unrecorded = Math.max(0, totalPaid - inTrans);
-            if (unrecorded > 0) {
-                const isIncoming = (qe.entryType === 'manual_sale' || qe.entryType === 'receipt');
-                boxBalances[qe.cashBoxId] += (isIncoming ? unrecorded : -unrecorded);
-            }
-        });
+        // 2. Use the unified calculation utilities
+        const { boxBalances } = calculateUnifiedCashBalances(
+            boxes as any[],
+            transactions as any[],
+            invoices as any[],
+            vouchers as any[],
+            quickEntries as any[]
+        );
 
         // 3. Batch Update Box Balances
         let batch = writeBatch(db);
         let count = 0;
-        for (const bId of Object.keys(boxBalances)) {
-            batch.update(doc(db, "cashBoxes", bId), { balance: boxBalances[bId], updatedAt: new Date().toISOString() });
+
+        const updateBatch = async (ref: any, data: any) => {
+            batch.update(ref, data);
             count++;
             if (count >= 400) {
                 await batch.commit();
                 batch = writeBatch(db);
                 count = 0;
             }
+        };
+
+        const nowIso = new Date().toISOString();
+
+        for (const bId of Object.keys(boxBalances)) {
+            await updateBatch(doc(db, "cashBoxes", bId), { balance: boxBalances[bId], updatedAt: nowIso });
         }
+
         if (count > 0) await batch.commit();
 
-        // 4. Partner Balances (Simplified for now, similar logic can be applied if needed)
-        // But the primary complaint was box balances.
-        
         console.log("Financial State Rebuild Completed Successfully.");
         return true;
     }

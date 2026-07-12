@@ -51,13 +51,12 @@ export default function Reports() {
             setMonthlySummaries(monthlyData as any[]);
 
             // Calculate Live Stats
-            const { totalBalance } = calculateUnifiedCashBalances(
-                boxes as CashBox[],
-                transactions as Transaction[],
-                invoices as Invoice[],
-                vouchers as Voucher[],
-                quickEntries as QuickFinancialEntry[]
-            );
+            let totalBalance = 0;
+            (boxes as CashBox[]).forEach((b) => {
+                if (b.recordStatus !== 'deleted' && b.isActive !== false) {
+                    totalBalance += (b.balance || 0);
+                }
+            });
 
             // Calculate totals from daily summaries for now (or we could calculate from raw data)
             const sales = dailyData.reduce((sum, s: any) => sum + (s.salesTotal || 0), 0);

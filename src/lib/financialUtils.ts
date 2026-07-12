@@ -98,7 +98,7 @@ export function calculateUnifiedCashBalances(
         
         if (unrecordedPaid > 0) {
             const type = qe.entryType;
-            const isIncoming = (type === 'manual_sale' || type === 'receipt');
+            const isIncoming = ['sale', 'manual_sale', 'customer_receipt', 'receipt'].includes(type);
             boxBalances[qe.cashBoxId] = (boxBalances[qe.cashBoxId] || 0) + (isIncoming ? unrecordedPaid : -unrecordedPaid);
         }
     });

@@ -187,22 +187,9 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
             dbService.getAll("cashBoxes")
         ]);
 
-        const { boxBalances } = calculateUnifiedCashBalances(
-            boxes as CashBox[],
-            txs as Transaction[],
-            invs as Invoice[],
-            vchs as Voucher[],
-            qes as QuickFinancialEntry[]
-        );
+        setCashBoxes(boxes as CashBox[]);
 
-        const updatedBoxes = (boxes as CashBox[]).map(b => ({
-            ...b,
-            balance: boxBalances[b.id!] || 0
-        }));
-        setCashBoxes(updatedBoxes);
-        setCalculatedBalances(boxBalances);
-
-        const boxMap = new Map((updatedBoxes as any[]).map(b => [b.id, b.name]));
+        const boxMap = new Map((boxes as any[]).map(b => [b.id, b.name]));
 
         const allMovements: FinancialMovement[] = [];
 
@@ -376,7 +363,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
     try {
         if (transToDelete.type === 'قبض' && transToDelete.boxId) {
             const box = cashBoxes.find(b => b.id === transToDelete.boxId);
-            const currentBalance = box ? (boxBalances[box.id!] || 0) : 0;
+            const currentBalance = box ? (box.balance || 0) : 0;
             if (box && (currentBalance - transToDelete.amount!) < 0) {
                 alert("لا يمكن حذف سند القبض لأنه سيؤدي إلى رصيد سالب في الصندوق.");
                 setIsSaving(false);
@@ -385,7 +372,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
             }
         } else if (transToDelete.type === 'تحويل' && transToDelete.toBoxId) {
             const box = cashBoxes.find(b => b.id === transToDelete.toBoxId);
-            const currentBalance = box ? (boxBalances[box.id!] || 0) : 0;
+            const currentBalance = box ? (box.balance || 0) : 0;
             if (box && (currentBalance - transToDelete.amount!) < 0) {
                 alert("لا يمكن حذف التحويل لأنه سيؤدي إلى رصيد سالب في الصندوق المستلم.");
                 setIsSaving(false);
@@ -437,7 +424,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
         
         const totalIn = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] > 0) ? curr.boxChanges[viewingBox.id] : 0), 0);
         const totalOut = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] < 0) ? Math.abs(curr.boxChanges[viewingBox.id]) : 0), 0);
-        const openingBalance = viewingBox.initialBalance !== undefined ? viewingBox.initialBalance : (calculatedBalances[viewingBox.id!] || viewingBox.balance || 0) - totalIn + totalOut;
+        const openingBalance = viewingBox.initialBalance !== undefined ? viewingBox.initialBalance : (viewingBox.balance || 0) - totalIn + totalOut;
         
         const dateStr = new Date().toLocaleDateString('ar-YE', { 
             year: 'numeric', month: '2-digit', day: '2-digit'
@@ -1108,7 +1095,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
                         الرصيد الحالي
                       </span>
                       <span className="text-2xl font-black text-slate-900 font-mono tracking-tighter">
-                        {(calculatedBalances[box.id!] || 0).toLocaleString()}
+                        {(box.balance || 0).toLocaleString()}
                         <span className="text-sm font-normal mr-2 opacity-30">
                           {box.currency}
                         </span>
@@ -1671,7 +1658,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
           
           const totalIn = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] > 0) ? curr.boxChanges[viewingBox.id] : 0), 0);
           const totalOut = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] < 0) ? Math.abs(curr.boxChanges[viewingBox.id]) : 0), 0);
-          const openingBalance = viewingBox.initialBalance !== undefined ? viewingBox.initialBalance : (calculatedBalances[viewingBox.id!] || viewingBox.balance || 0) - totalIn + totalOut;
+          const openingBalance = viewingBox.initialBalance !== undefined ? viewingBox.initialBalance : (viewingBox.balance || 0) - totalIn + totalOut;
           
           const runningBalances = new Map();
           let currentBalance = openingBalance;

@@ -242,13 +242,10 @@ const lensTypeOptions = [
             dbService.getAll("quick_financial_entries")
         ]);
 
-        const { boxBalances } = calculateUnifiedCashBalances(
-            boxData as CashBox[],
-            txs as any[],
-            invs as any[],
-            vchs as any[],
-            qes as any[]
-        );
+        const boxBalances: Record<string, number> = {};
+        (boxData as CashBox[]).forEach(b => {
+            boxBalances[b.id!] = b.balance || 0;
+        });
         setCalculatedBalances(boxBalances);
 
         setProducts(prodData as Product[]);
