@@ -7,18 +7,9 @@ export enum OperationType {
     WRITE = 'write',
 }
 
-export interface AggregationImpact {
-    salesTotal?: number;
-    purchasesTotal?: number;
-    receiptsTotal?: number;
-    paymentsTotal?: number;
-    expensesTotal?: number;
-    profitsTotal?: number;
-    receivablesChange?: number;
-    payablesChange?: number;
-    cashBalanceChange?: number;
-    transactionCount?: number;
-}
+// AggregationImpact is the canonical definition in aggregationEngine.ts
+// Re-exported here for convenience so existing imports from types.ts continue to work.
+export type { AggregationImpact } from "./services/aggregationEngine";
 
 export type EntityType = 'sale' | 'purchase' | 'sale_return' | 'purchase_return';
 export type TransactionType = 'قبض' | 'صرف' | 'customer_receipt' | 'supplier_payment';

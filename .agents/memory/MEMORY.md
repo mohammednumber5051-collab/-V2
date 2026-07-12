@@ -1,0 +1,1 @@
+- [Phase 2 Financial Refactor](phase2-financial-refactor.md) — FEE is the only engine; all 14 op types unified; no more dual-path accounting.
