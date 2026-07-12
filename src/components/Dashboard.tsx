@@ -21,6 +21,7 @@ import { dbService } from "../services/db";
 import { motion } from "motion/react";
 import { cn, hasPermission } from "../lib/utils";
 import { AppUser, CashBox } from "../types";
+import { calculateUnifiedCashBalances } from "../lib/financialUtils";
 
 export default function Dashboard({ onNavigate, currentUser }: { onNavigate?: (page: any) => void, currentUser?: AppUser | null }) {
     const fallbackName = "المستخدم"; 
@@ -67,21 +68,38 @@ export default function Dashboard({ onNavigate, currentUser }: { onNavigate?: (p
                 const dashCache = await dbService.getAll("dashboard_cache");
                 const globalCache = dashCache.find(c => c.id === 'global') || {};
                 
-                // Fetch cash boxes directly for accurate live total
-                const cashBoxes = await dbService.getAll("cashBoxes") as CashBox[];
+                // Fetch cash boxes directly
+                const cashBoxes = await dbService.getAll("cashBoxes");
                 
                 const hasViewBalancePermission = hasPermission(currentUser, 'view_cash_balance');
                 const userAssignedBoxId = currentUser?.assignedBoxId;
 
                 let finalBalance = 0;
                 if (hasViewBalancePermission) {
-                    if (userAssignedBoxId) {
-                        const assignedBox = cashBoxes.find(b => b.id === userAssignedBoxId);
-                        finalBalance = assignedBox ? (Number(assignedBox.balance) || 0) : 0;
+                    const role = (currentUser?.role || '').toUpperCase().trim();
+                    const isManager = role.includes('ADMIN') || 
+                                      role.includes('SUPER') || 
+                                      role.includes('OWNER') || 
+                                      role === 'مالك' || 
+                                      role === 'المدير العام' || 
+                                      role === 'مدير النظام' || 
+                                      role === 'محاسب' || 
+                                      role.includes('ACCOUNTANT') ||
+                                      role === 'MANAGER';
+
+                    let totalBalance = 0;
+                    const boxBalances: Record<string, number> = {};
+                    (cashBoxes as CashBox[]).forEach((b) => {
+                        if (b.recordStatus !== 'deleted' && b.isActive !== false) {
+                            totalBalance += (b.balance || 0);
+                        }
+                        boxBalances[b.id!] = (b.balance || 0);
+                    });
+
+                    if (userAssignedBoxId && !isManager) {
+                        finalBalance = boxBalances[userAssignedBoxId] || 0;
                     } else {
-                        finalBalance = cashBoxes
-                            .filter(b => b.recordStatus !== 'deleted' && b.isActive !== false)
-                            .reduce((sum, b) => sum + (Number(b.balance) || 0), 0);
+                        finalBalance = totalBalance;
                     }
                 }
 
@@ -139,7 +157,13 @@ export default function Dashboard({ onNavigate, currentUser }: { onNavigate?: (p
             >
                 <div className="relative z-10 flex justify-between items-end">
                     <div className="space-y-1">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">الرصيد النقدي المتوفر</span>
+                        <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">الرصيد النقدي المتوفر</span>
+                            <span className="flex items-center gap-1 bg-emerald-500/10 text-emerald-400 text-[8px] px-1.5 py-0.5 rounded-full border border-emerald-500/20 animate-pulse">
+                                <span className="w-1 h-1 bg-emerald-500 rounded-full"></span>
+                                مباشر
+                            </span>
+                        </div>
                         <div className="text-3xl font-black font-mono">
                             {hasPermission(currentUser, 'view_cash_balance') ? (
                                 <>

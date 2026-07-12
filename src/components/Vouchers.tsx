@@ -74,9 +74,10 @@ export default function Vouchers({ currentUser }: { currentUser: AppUser }) {
     };
 
     const filteredVouchers = vouchers.filter(v => {
+        if (v.recordStatus === 'deleted') return false;
         const dateStr = new Date(v.createdAt).toISOString().split('T')[0];
         const matchDate = searchDate ? dateStr === searchDate : true;
-        const matchPartner = searchPartner ? v.partnerName.includes(searchPartner) : true;
+        const matchPartner = searchPartner ? v.partnerName?.includes(searchPartner) : true;
         const matchType = searchType !== 'all' ? v.type === searchType : true;
         return matchDate && matchPartner && matchType;
     });

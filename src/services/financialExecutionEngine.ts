@@ -1,5 +1,6 @@
 import { db, doc, collection, increment, runTransaction, getDocs, query, writeBatch, where } from "../firebase";
 import { AggregationEngine, AggregationImpact } from "./aggregationEngine";
+import { calculateUnifiedCashBalances } from "../lib/financialUtils";
 import { FinancialEngine as OldFinancialEngine } from "./financialEngine";
 
 // local cleanData function since db.ts doesn't export it
@@ -21,7 +22,7 @@ function cleanData(obj: any): any {
 
 export interface FinancialOperation {
     operationId: string;
-    type: 'ADD_TRANSACTION' | 'RECORD_INVOICE_PAYMENT' | 'CREATE_TRANSFER' | 'APPLY_INVOICE_IMPACT' | 'CREATE_QUICK_ENTRY';
+    type: 'ADD_TRANSACTION' | 'RECORD_INVOICE_PAYMENT' | 'CREATE_TRANSFER' | 'APPLY_INVOICE_IMPACT' | 'CREATE_QUICK_ENTRY' | 'UPDATE_QUICK_ENTRY' | 'DELETE_QUICK_ENTRY';
     payload: any;
     user: any;
     timestamp?: string;
@@ -272,96 +273,196 @@ export class FinancialExecutionEngine {
             return entryId;
         }
 
+        if (type === 'DELETE_QUICK_ENTRY') {
+            const { entry } = payload;
+            const entryId = entry.id;
+
+            // Calculate old impact to reverse it
+            const impact = OldFinancialEngine.getQuickEntryImpact(entry, user);
+
+            // Mark quick entry as deleted
+            const entryRef = doc(db, "quick_financial_entries", entryId);
+            transaction.set(entryRef, { recordStatus: 'deleted', updatedAt: now }, { merge: true });
+
+            // Reverse partner balance
+            if (entry.partnerId && impact.partnerBalanceChange !== 0) {
+                const partnerColl = (entry.entryType === 'manual_sale' || entry.entryType === 'receipt') ? 'customers' : 'suppliers';
+                const partnerRef = doc(db, partnerColl, entry.partnerId);
+                transaction.set(partnerRef, { balance: increment(-impact.partnerBalanceChange), updatedAt: now }, { merge: true });
+            }
+
+            // Reverse cashBox balance
+            if (entry.cashBoxId && impact.cashBoxBalanceChange !== 0) {
+                const boxRef = doc(db, "cashBoxes", entry.cashBoxId);
+                transaction.set(boxRef, { balance: increment(-impact.cashBoxBalanceChange), updatedAt: now }, { merge: true });
+            }
+
+            // Mark old transactions as deleted
+            const transSnap = await getDocs(query(collection(db, "transactions"), where("sourceId", "==", entryId)));
+            for (const docSnap of transSnap.docs) {
+                transaction.set(doc(db, "transactions", docSnap.id), { recordStatus: 'deleted', updatedAt: now }, { merge: true });
+            }
+
+            // Apply negative of the original aggregation impact to adjust stats
+            if (impact.aggregationImpact) {
+                const negImpact: AggregationImpact = {};
+                if (impact.aggregationImpact.transactionCount) negImpact.transactionCount = -impact.aggregationImpact.transactionCount;
+                if (impact.aggregationImpact.receiptsTotal) negImpact.receiptsTotal = -impact.aggregationImpact.receiptsTotal;
+                if (impact.aggregationImpact.paymentsTotal) negImpact.paymentsTotal = -impact.aggregationImpact.paymentsTotal;
+                if (impact.aggregationImpact.receivablesChange) negImpact.receivablesChange = -impact.aggregationImpact.receivablesChange;
+                if (impact.aggregationImpact.payablesChange) negImpact.payablesChange = -impact.aggregationImpact.payablesChange;
+                if (impact.aggregationImpact.cashBalanceChange) negImpact.cashBalanceChange = -impact.aggregationImpact.cashBalanceChange;
+                
+                AggregationEngine.applyFinancialImpact(transaction as any, new Date(entry.createdAt || now), negImpact);
+            }
+
+            return entryId;
+        }
+
+        if (type === 'UPDATE_QUICK_ENTRY') {
+            const { oldEntry, newEntry } = payload;
+            const entryId = newEntry.id;
+
+            const oldImpact = OldFinancialEngine.getQuickEntryImpact(oldEntry, user);
+            const newImpact = OldFinancialEngine.getQuickEntryImpact(newEntry, user);
+
+            // Update quick entry document
+            const entryRef = doc(db, "quick_financial_entries", entryId);
+            transaction.set(entryRef, cleanData({ ...newEntry, recordStatus: 'active', updatedAt: now }));
+
+            // Adjust partner balance
+            // If partner changed, we must reverse old partner's balance and apply new impact to new partner!
+            if (oldEntry.partnerId === newEntry.partnerId) {
+                const netPartnerChange = newImpact.partnerBalanceChange - oldImpact.partnerBalanceChange;
+                if (newEntry.partnerId && netPartnerChange !== 0) {
+                    const partnerColl = (newEntry.entryType === 'manual_sale' || newEntry.entryType === 'receipt') ? 'customers' : 'suppliers';
+                    const partnerRef = doc(db, partnerColl, newEntry.partnerId);
+                    transaction.set(partnerRef, { balance: increment(netPartnerChange), updatedAt: now }, { merge: true });
+                }
+            } else {
+                // Reverse old partner
+                if (oldEntry.partnerId && oldImpact.partnerBalanceChange !== 0) {
+                    const oldPartnerColl = (oldEntry.entryType === 'manual_sale' || oldEntry.entryType === 'receipt') ? 'customers' : 'suppliers';
+                    const oldPartnerRef = doc(db, oldPartnerColl, oldEntry.partnerId);
+                    transaction.set(oldPartnerRef, { balance: increment(-oldImpact.partnerBalanceChange), updatedAt: now }, { merge: true });
+                }
+                // Apply to new partner
+                if (newEntry.partnerId && newImpact.partnerBalanceChange !== 0) {
+                    const newPartnerColl = (newEntry.entryType === 'manual_sale' || newEntry.entryType === 'receipt') ? 'customers' : 'suppliers';
+                    const newPartnerRef = doc(db, newPartnerColl, newEntry.partnerId);
+                    transaction.set(newPartnerRef, { balance: increment(newImpact.partnerBalanceChange), updatedAt: now }, { merge: true });
+                }
+            }
+
+            // Adjust cashBox balance
+            if (oldEntry.cashBoxId === newEntry.cashBoxId) {
+                const netBoxChange = newImpact.cashBoxBalanceChange - oldImpact.cashBoxBalanceChange;
+                if (newEntry.cashBoxId && netBoxChange !== 0) {
+                    const boxRef = doc(db, "cashBoxes", newEntry.cashBoxId);
+                    transaction.set(boxRef, { balance: increment(netBoxChange), updatedAt: now }, { merge: true });
+                }
+            } else {
+                // Reverse old box
+                if (oldEntry.cashBoxId && oldImpact.cashBoxBalanceChange !== 0) {
+                    const oldBoxRef = doc(db, "cashBoxes", oldEntry.cashBoxId);
+                    transaction.set(oldBoxRef, { balance: increment(-oldImpact.cashBoxBalanceChange), updatedAt: now }, { merge: true });
+                }
+                // Apply to new box
+                if (newEntry.cashBoxId && newImpact.cashBoxBalanceChange !== 0) {
+                    const newBoxRef = doc(db, "cashBoxes", newEntry.cashBoxId);
+                    transaction.set(newBoxRef, { balance: increment(newImpact.cashBoxBalanceChange), updatedAt: now }, { merge: true });
+                }
+            }
+
+            // Mark old transactions as deleted
+            const transSnap = await getDocs(query(collection(db, "transactions"), where("sourceId", "==", entryId)));
+            for (const docSnap of transSnap.docs) {
+                transaction.set(doc(db, "transactions", docSnap.id), { recordStatus: 'deleted', updatedAt: now }, { merge: true });
+            }
+
+            // Write new transactions
+            for (const transData of newImpact.transactions) {
+                const transRef = doc(collection(db, "transactions"));
+                transaction.set(transRef, cleanData({ ...transData, id: transRef.id, recordStatus: 'active', updatedAt: now }));
+            }
+
+            // Adjust aggregation stats
+            if (oldImpact.aggregationImpact || newImpact.aggregationImpact) {
+                const netAggImpact: AggregationImpact = {};
+                const oldAgg = oldImpact.aggregationImpact || {};
+                const newAgg = newImpact.aggregationImpact || {};
+
+                const getVal = (o: any, n: any) => (n || 0) - (o || 0);
+
+                netAggImpact.transactionCount = getVal(oldAgg.transactionCount, newAgg.transactionCount);
+                netAggImpact.receiptsTotal = getVal(oldAgg.receiptsTotal, newAgg.receiptsTotal);
+                netAggImpact.paymentsTotal = getVal(oldAgg.paymentsTotal, newAgg.paymentsTotal);
+                netAggImpact.receivablesChange = getVal(oldAgg.receivablesChange, newAgg.receivablesChange);
+                netAggImpact.payablesChange = getVal(oldAgg.payablesChange, newAgg.payablesChange);
+                netAggImpact.cashBalanceChange = getVal(oldAgg.cashBalanceChange, newAgg.cashBalanceChange);
+
+                AggregationEngine.applyFinancialImpact(transaction as any, new Date(newEntry.createdAt || now), netAggImpact);
+            }
+
+            return entryId;
+        }
+
         return true;
     }
 
     static async rebuildFinancialState() {
-        console.log("Starting Financial State Rebuild from Transactions Only...");
+        console.log("Starting Precise Financial State Rebuild...");
         
-        // 1. Fetch all active transactions
-        const transSnap = await getDocs(query(collection(db, "transactions"), where("recordStatus", "==", "active")));
-        
-        const customersToUpdate: Record<string, number> = {};
-        const suppliersToUpdate: Record<string, number> = {};
-        const cashBoxesToUpdate: Record<string, number> = {};
-        const invoicesPaidToUpdate: Record<string, number> = {};
+        // 1. Fetch all relevant data in parallel
+        const [transSnap, allBoxes, allCust, allSup, allInv, allVch, allQE] = await Promise.all([
+            getDocs(query(collection(db, "transactions"), where("recordStatus", "==", "active"))),
+            getDocs(collection(db, "cashBoxes")),
+            getDocs(collection(db, "customers")),
+            getDocs(collection(db, "suppliers")),
+            getDocs(collection(db, "invoices")),
+            getDocs(collection(db, "vouchers")),
+            getDocs(collection(db, "quick_financial_entries"))
+        ]);
 
-        for (const docSnap of transSnap.docs) {
-            const trans = docSnap.data();
-            
-            if (trans.boxId) {
-                cashBoxesToUpdate[trans.boxId] = cashBoxesToUpdate[trans.boxId] || 0;
-                const amt = (trans.type === 'قبض' || trans.type === 'customer_receipt') ? trans.amount : -trans.amount;
-                cashBoxesToUpdate[trans.boxId] += amt;
-            }
+        const transactions = transSnap.docs.map(d => ({ ...d.data(), id: d.id }));
+        const boxes = allBoxes.docs.map(d => ({ ...d.data(), id: d.id }));
+        const invoices = allInv.docs.map(d => ({ ...d.data(), id: d.id }));
+        const vouchers = allVch.docs.map(d => ({ ...d.data(), id: d.id }));
+        const quickEntries = allQE.docs.map(d => ({ ...d.data(), id: d.id }));
 
-            if (trans.toBoxId && trans.sourceType === 'transfer') {
-                cashBoxesToUpdate[trans.toBoxId] = cashBoxesToUpdate[trans.toBoxId] || 0;
-                cashBoxesToUpdate[trans.toBoxId] += trans.amount;
-            }
+        // 2. Use the unified calculation utilities
+        const { boxBalances } = calculateUnifiedCashBalances(
+            boxes as any[],
+            transactions as any[],
+            invoices as any[],
+            vouchers as any[],
+            quickEntries as any[]
+        );
 
-            if (trans.partnerId) {
-                const isCustomer = trans.type === 'قبض' || trans.type === 'customer_receipt' || trans.sourceType === 'sales_invoice' || trans.sourceType === 'manual_sale';
-                
-                if (isCustomer) {
-                    customersToUpdate[trans.partnerId] = customersToUpdate[trans.partnerId] || 0;
-                    if (trans.sourceType === 'sales_invoice' || trans.sourceType === 'manual_sale') {
-                         customersToUpdate[trans.partnerId] += trans.amount;
-                    } else if (trans.type === 'قبض' || trans.type === 'customer_receipt') {
-                         customersToUpdate[trans.partnerId] -= trans.amount;
-                    }
-                } else {
-                    suppliersToUpdate[trans.partnerId] = suppliersToUpdate[trans.partnerId] || 0;
-                    if (trans.sourceType === 'purchase_invoice' || trans.sourceType === 'manual_purchase') {
-                         suppliersToUpdate[trans.partnerId] += trans.amount;
-                    } else if (trans.type === 'صرف' || trans.type === 'manual_payment') {
-                         suppliersToUpdate[trans.partnerId] -= trans.amount;
-                    }
-                }
-            }
-
-            if (trans.relatedId && trans.sourceType === 'invoice_payment') {
-                invoicesPaidToUpdate[trans.relatedId] = invoicesPaidToUpdate[trans.relatedId] || 0;
-                invoicesPaidToUpdate[trans.relatedId] += trans.amount;
-            }
-        }
-
+        // 3. Batch Update Box Balances
         let batch = writeBatch(db);
-        let batchCount = 0;
-        const commitBatch = async () => {
-            if (batchCount > 0) {
+        let count = 0;
+
+        const updateBatch = async (ref: any, data: any) => {
+            batch.update(ref, data);
+            count++;
+            if (count >= 400) {
                 await batch.commit();
                 batch = writeBatch(db);
-                batchCount = 0;
+                count = 0;
             }
+        };
+
+        const nowIso = new Date().toISOString();
+
+        for (const bId of Object.keys(boxBalances)) {
+            await updateBatch(doc(db, "cashBoxes", bId), { balance: boxBalances[bId], updatedAt: nowIso });
         }
 
-        // We MUST reset ALL existing cashBoxes, customers, suppliers balances to 0 first, but since we are doing absolute calculation, we can just fetch all and overwrite!
-        const allBoxes = await getDocs(collection(db, "cashBoxes"));
-        for (const b of allBoxes.docs) {
-            batch.set(doc(db, "cashBoxes", b.id), { balance: cashBoxesToUpdate[b.id] || 0 }, { merge: true });
-            batchCount++; if (batchCount >= 400) await commitBatch();
-        }
+        if (count > 0) await batch.commit();
 
-        const allCust = await getDocs(collection(db, "customers"));
-        for (const c of allCust.docs) {
-            batch.set(doc(db, "customers", c.id), { balance: customersToUpdate[c.id] || 0 }, { merge: true });
-            batchCount++; if (batchCount >= 400) await commitBatch();
-        }
-
-        const allSup = await getDocs(collection(db, "suppliers"));
-        for (const s of allSup.docs) {
-            batch.set(doc(db, "suppliers", s.id), { balance: suppliersToUpdate[s.id] || 0 }, { merge: true });
-            batchCount++; if (batchCount >= 400) await commitBatch();
-        }
-
-        const allInv = await getDocs(collection(db, "invoices"));
-        for (const i of allInv.docs) {
-            batch.set(doc(db, "invoices", i.id), { paid: invoicesPaidToUpdate[i.id] || 0 }, { merge: true });
-            batchCount++; if (batchCount >= 400) await commitBatch();
-        }
-
-        await commitBatch();
+        console.log("Financial State Rebuild Completed Successfully.");
         return true;
     }
+
 }

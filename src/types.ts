@@ -21,7 +21,7 @@ export interface AggregationImpact {
 }
 
 export type EntityType = 'sale' | 'purchase' | 'sale_return' | 'purchase_return';
-export type TransactionType = 'قبض' | 'صرف';
+export type TransactionType = 'قبض' | 'صرف' | 'customer_receipt' | 'supplier_payment';
 export type InvoiceStatus = 'مدفوع' | 'جزئي' | 'آجل';
 export type Currency = 'YER' | 'SAR' | 'USD';
 export type PaymentType = 'نقدآ' | 'آجل' | 'نقد_آجل' | 'مجاني';
@@ -256,6 +256,7 @@ export type TransactionSourceType =
     | 'quick_financial_entry' 
     | 'manual_receipt' 
     | 'manual_payment' 
+    | 'invoice_payment'
     | 'adjustment' 
     | 'transfer';
 

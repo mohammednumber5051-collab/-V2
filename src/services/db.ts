@@ -2,6 +2,7 @@ import { app, auth, db, collection, addDoc, updateDoc, deleteDoc, doc, setDoc, g
 import { authService } from "./authService";
 import { syncEngine } from "./syncEngine";
 import { localDbService } from "./localDb";
+import { FinancialExecutionEngine } from "./financialExecutionEngine";
 import { StoreSettings } from "../types";
 
 export const cleanData = (obj: any): any => {
@@ -576,9 +577,6 @@ export const dbService = {
             await addDoc(collection(db, "settings"), cleanData(data));
         }
     },
-    async createQuickFinancialEntry(entry) { return "1"; },
-    async updateQuickFinancialEntry(oldE, newE) {},
-    async deleteQuickFinancialEntry(e) {},
     async recalculateFinancials() {
         const batch = writeBatch(db);
         

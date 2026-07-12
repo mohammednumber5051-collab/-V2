@@ -209,6 +209,8 @@ function AppContent() {
         if (_currentUser) {
            setCurrentUser(_currentUser);
            migrationService.migrateOldInvoices().catch(console.error);
+           migrationService.migrateOldQuickEntries().catch(console.error);
+           migrationService.recoverZeroedInvoices().catch(console.error);
         }
       } catch (err) {
         console.error("Session init failed", err);
