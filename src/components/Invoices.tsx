@@ -44,7 +44,8 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
     }, [propCurrentUser]);
 
     const [invoices, setInvoices] = useState<Invoice[]>([]);
-    const [hasMoreInvoices, setHasMoreInvoices] = useState(false);
+    const [lastInvoiceDoc, setLastInvoiceDoc] = useState<any>(null);
+    const [hasMoreInvoices, setHasMoreInvoices] = useState(true);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     
     const [products, setProducts] = useState<Product[]>([]);
@@ -266,15 +267,25 @@ const lensTypeOptions = [
         }
     };
 
-    const loadInvoices = async (_reset: boolean = false) => {
-        setIsLoadingMore(true);
+    const loadInvoices = async (reset: boolean = false) => {
+        if (reset) {
+            setInvoices([]);
+            setLastInvoiceDoc(null);
+        } else {
+            setIsLoadingMore(true);
+        }
+        
         try {
-            const allInvoices = await dbService.getAll("invoices");
-            const filtered = (allInvoices as Invoice[]).filter(
-                inv => inv.type === type && inv.recordStatus !== 'deleted'
-            );
-            setInvoices(filtered);
-            setHasMoreInvoices(false);
+            const res = await dbService.getPaginated("invoices", 25, reset ? null : lastInvoiceDoc, [{ field: 'type', op: '==', value: type }]);
+            setInvoices(prev => {
+                const newData = res.data as Invoice[];
+                if (reset) return newData;
+                const existingIds = new Set(prev.map(i => i.id).filter(Boolean));
+                const filteredNew = newData.filter(i => !existingIds.has(i.id));
+                return [...prev, ...filteredNew];
+            });
+            setLastInvoiceDoc(res.lastDoc);
+            setHasMoreInvoices(res.hasMore);
         } catch (error) {
             console.error("Failed to load invoices", error);
         } finally {
@@ -738,7 +749,7 @@ const lensTypeOptions = [
     };
 
     const [statusFilter, setStatusFilter] = useState<'الكل' | InvoiceStatus>('الكل');
-    const [dateFilterType, setDateFilterType] = useState<'today' | 'specific_date' | 'date_range' | 'all'>('all');
+    const [dateFilterType, setDateFilterType] = useState<'today' | 'specific_date' | 'date_range' | 'all'>('today');
     const [filterSpecificDate, setFilterSpecificDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
     const [filterStartDate, setFilterStartDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
     const [filterEndDate, setFilterEndDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
