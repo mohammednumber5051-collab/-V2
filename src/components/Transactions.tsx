@@ -135,6 +135,15 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
     return unsubscribe;
   }, [propCurrentUser]);
 
+  // Keep viewingBox in sync with fresh cashBoxes data (prevents stale balance display)
+  useEffect(() => {
+    if (!viewingBox) return;
+    const fresh = cashBoxes.find(b => b.id === viewingBox.id);
+    if (fresh && fresh.balance !== viewingBox.balance) {
+      setViewingBox(fresh);
+    }
+  }, [cashBoxes]);
+
   useEffect(() => {
     if (!viewingBox) {
       setViewingBoxMovements([]);
@@ -394,7 +403,9 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
         
         const totalIn = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] > 0) ? curr.boxChanges[viewingBox.id] : 0), 0);
         const totalOut = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] < 0) ? Math.abs(curr.boxChanges[viewingBox.id]) : 0), 0);
-        const openingBalance = viewingBox.initialBalance !== undefined ? viewingBox.initialBalance : (viewingBox.balance || 0) - totalIn + totalOut;
+        const openingBalance = viewingBox.initialBalance !== undefined ? viewingBox.initialBalance : 0;
+        const computedBalancePrint = openingBalance + totalIn - totalOut;
+        const reconciliationDiffPrint = (viewingBox.balance || 0) - computedBalancePrint;
         
         const dateStr = new Date().toLocaleDateString('ar-YE', { 
             year: 'numeric', month: '2-digit', day: '2-digit'
@@ -1567,7 +1578,13 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
           
           const totalIn = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] > 0) ? curr.boxChanges[viewingBox.id] : 0), 0);
           const totalOut = boxTransactions.reduce((acc, curr) => acc + ((curr.boxChanges && curr.boxChanges[viewingBox.id] < 0) ? Math.abs(curr.boxChanges[viewingBox.id]) : 0), 0);
-          const openingBalance = viewingBox.initialBalance !== undefined ? viewingBox.initialBalance : (viewingBox.balance || 0) - totalIn + totalOut;
+          // Opening balance: use stored initialBalance if set, otherwise derive from Firestore balance minus all tracked movements
+          const openingBalance = viewingBox.initialBalance !== undefined ? viewingBox.initialBalance : 0;
+          const computedBalance = openingBalance + totalIn - totalOut;
+          const firestoreBalance = viewingBox.balance || 0;
+          // Positive diff = Firestore has MORE than movements explain (phantom balance from un-reversed delete/edit)
+          // Negative diff = movements show MORE than Firestore (shouldn't happen in normal operation)
+          const reconciliationDiff = firestoreBalance - computedBalance;
           
           const runningBalances = new Map();
           let currentBalance = openingBalance;
@@ -1677,13 +1694,38 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
                     {totalOut.toLocaleString()} <span className="text-[9px] font-normal opacity-50">{viewingBox.currency}</span>
                   </p>
                 </div>
-                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 flex flex-col justify-center">
-                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-0.5">الرصيد الحالي</p>
-                  <p className="text-base font-black text-slate-800 font-mono tracking-tighter">
-                    {(viewingBox.balance || 0).toLocaleString()} <span className="text-[9px] font-normal opacity-50">{viewingBox.currency}</span>
+                <div className={`p-2.5 rounded-lg border flex flex-col justify-center ${reconciliationDiff !== 0 ? 'bg-orange-50 border-orange-200' : 'bg-slate-50 border-slate-200'}`}>
+                  <p className={`text-[10px] font-black uppercase tracking-widest mb-0.5 ${reconciliationDiff !== 0 ? 'text-orange-600' : 'text-slate-500'}`}>
+                    الرصيد الحالي {reconciliationDiff !== 0 ? '⚠' : ''}
                   </p>
+                  <p className={`text-base font-black font-mono tracking-tighter ${reconciliationDiff !== 0 ? 'text-orange-800' : 'text-slate-800'}`}>
+                    {firestoreBalance.toLocaleString()} <span className="text-[9px] font-normal opacity-50">{viewingBox.currency}</span>
+                  </p>
+                  {reconciliationDiff !== 0 && (
+                    <p className="text-[9px] text-orange-500 font-bold mt-0.5">
+                      الحركات: {computedBalance.toLocaleString()}
+                    </p>
+                  )}
                 </div>
               </div>
+              {/* Reconciliation warning banner */}
+              {reconciliationDiff !== 0 && (
+                <div className="mx-3 mb-2 mt-1 px-3 py-2 bg-orange-50 border border-orange-200 rounded-lg flex items-start gap-2">
+                  <span className="text-orange-500 text-sm mt-0.5 shrink-0">⚠</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] font-black text-orange-800">
+                      فرق في الرصيد: {Math.abs(reconciliationDiff).toLocaleString()} {viewingBox.currency}
+                    </p>
+                    <p className="text-[10px] text-orange-600 mt-0.5">
+                      {reconciliationDiff > 0
+                        ? 'الرصيد في قاعدة البيانات أعلى من مجموع الحركات الظاهرة — على الأرجح بسبب حذف أو تعديل قيد لم يُعكس أثره على الصندوق سابقاً.'
+                        : 'مجموع الحركات أعلى من رصيد قاعدة البيانات — قد تكون هناك حركات مكررة.'
+                      }
+                      {' '}قم بتشغيل <strong>إعادة حساب الأرصدة</strong> من إعدادات النظام لتصحيح الرصيد.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Transactions list */}
               <div className="flex-1 overflow-auto bg-slate-50/50 p-3">
@@ -1773,6 +1815,25 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
                                 </td>
                                 <td className="px-3 py-2.5 text-left font-mono font-black text-rose-600 text-xs">
                                     {openingBalance < 0 ? `${Math.abs(openingBalance).toLocaleString()}` : "-"}
+                                </td>
+                                <td></td>
+                            </tr>
+                        )}
+                        {/* Reconciliation difference row — shown when Firestore balance ≠ movements sum */}
+                        {reconciliationDiff !== 0 && !isLoadingBoxTransactions && (
+                            <tr className="bg-orange-50/60 border-t-2 border-orange-200">
+                                <td colSpan={3} className="px-3 py-2.5 text-left font-black text-orange-700 text-[11px]">
+                                    ⚠ فرق غير مفسر في الحركات
+                                    <span className="block text-[9px] text-orange-500 font-bold mt-0.5">يُنصح بإعادة حساب الأرصدة من إعدادات النظام</span>
+                                </td>
+                                <td className="px-3 py-2.5 text-left font-mono font-black text-orange-600 text-xs">
+                                    {reconciliationDiff > 0 ? `+${reconciliationDiff.toLocaleString()}` : "-"}
+                                </td>
+                                <td className="px-3 py-2.5 text-left font-mono font-black text-orange-600 text-xs">
+                                    {reconciliationDiff < 0 ? `${Math.abs(reconciliationDiff).toLocaleString()}` : "-"}
+                                </td>
+                                <td className="px-3 py-2.5 text-left font-mono font-black text-orange-800 text-xs">
+                                    {firestoreBalance.toLocaleString()}
                                 </td>
                             </tr>
                         )}
