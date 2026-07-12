@@ -11,6 +11,7 @@ import { syncEngine } from "../services/syncEngine";
 import { Invoice, Product, Customer, Supplier, InvoiceItem, InvoiceStatus, Currency, PaymentType, CashBox } from "../types";
 import { motion, AnimatePresence, useDragControls } from "motion/react";
 import { cn, hasPermission } from "../lib/utils";
+import { calculateUnifiedCashBalances } from "../lib/financialUtils";
 import PrintPreviewModal from "./PrintPreviewModal";
 
 const PAYMENT_TYPES: { value: PaymentType; label: string; en: string }[] = [
@@ -77,6 +78,7 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
     const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
     const lastLoadedInvoiceIdRef = useRef<string | null>(null);
     const [invoiceToDelete, setInvoiceToDelete] = useState<Invoice | null>(null);
+    const [calculatedBalances, setCalculatedBalances] = useState<Record<string, number>>({});
 
     // Optical Prescription State
     const [showOpticalSection, setShowOpticalSection] = useState(false);
@@ -230,11 +232,22 @@ const lensTypeOptions = [
     }, [type, isModalOpen]);
 
     const loadStaticData = async () => {
-        const [prodData, partData, boxData] = await Promise.all([
+        const [prodData, partData, boxData, txs, invs, vchs, qes] = await Promise.all([
             dbService.getAll("products"),
             dbService.getAll(type.includes('sale') ? 'customers' : 'suppliers'),
-            dbService.getAll("cashBoxes")
+            dbService.getAll("cashBoxes"),
+            dbService.getAll("transactions"),
+            dbService.getAll("invoices"),
+            dbService.getAll("vouchers"),
+            dbService.getAll("quick_financial_entries")
         ]);
+
+        const boxBalances: Record<string, number> = {};
+        (boxData as CashBox[]).forEach(b => {
+            boxBalances[b.id!] = b.balance || 0;
+        });
+        setCalculatedBalances(boxBalances);
+
         setProducts(prodData as Product[]);
         setPartners(partData as (Customer | Supplier)[]);
         const boxes = boxData as CashBox[];
@@ -420,7 +433,8 @@ const lensTypeOptions = [
 
         if (invoice.type === 'purchase') {
             const box = cashBoxes.find(b => b.id === recordingBoxId);
-            if (box && ((box.balance || 0) - paymentAmount) < 0) {
+            const currentBalance = box ? (calculatedBalances[box.id!] || 0) : 0;
+            if (box && (currentBalance - paymentAmount) < 0) {
                 setValidationError("رصيد الصندوق غير كاف لإتمام هذه العملية (لا يمكن أن يكون بالسالب)");
                 return;
             }
@@ -504,7 +518,8 @@ const lensTypeOptions = [
         if (paidAmount > 0 && (type === 'purchase' || type === 'sale_return') && selectedBoxId) {
             const box = cashBoxes.find(b => b.id === selectedBoxId);
             if (box) {
-                let futureBalance = (box.balance || 0) - paidAmount;
+                const currentBalance = calculatedBalances[box.id!] || 0;
+                let futureBalance = currentBalance - paidAmount;
                 if (editingInvoiceId && oldInvoice && oldInvoice.boxId === selectedBoxId) {
                     futureBalance += oldInvoice.paid || 0;
                 }
@@ -680,8 +695,9 @@ const lensTypeOptions = [
         // Check for negative cashbox balance
         if (invoiceToDelete.type === 'sale' && invoiceToDelete.boxId && (invoiceToDelete.paid || 0) > 0) {
             const box = cashBoxes.find(b => b.id === invoiceToDelete.boxId);
-            if (box && ((box.balance || 0) - invoiceToDelete.paid!) < 0) {
-                setValidationError("لا يمكن حذف الفاتورة لأنها ستؤدي إلى رصيد سالب في الصندوق المستلم.");
+            const currentBalance = box ? (calculatedBalances[box.id!] || 0) : 0;
+            if (box && (currentBalance - invoiceToDelete.paid!) < 0) {
+                setValidationError("لا يمكن حذف الفاتورة لأنها ستؤدي إلى رصيد سالب في الصندوق.");
                 setIsSaving(false);
                 setInvoiceToDelete(null);
                 return;
@@ -739,6 +755,7 @@ const lensTypeOptions = [
     const [filterEndDate, setFilterEndDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
     const filteredInvoices = [...invoices].filter(inv => {
+        if (inv.recordStatus === 'deleted') return false;
         const matchesSearch = (inv.partnerName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
             (inv.invoiceNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
             (inv.referenceNumber || '').toLowerCase().includes(searchTerm.toLowerCase()) ||

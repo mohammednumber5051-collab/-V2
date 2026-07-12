@@ -16,6 +16,7 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
     const [partner, setPartner] = useState<Customer | Supplier | null>(null);
     const [invoices, setInvoices] = useState<Invoice[]>([]);
     const [transactions, setTransactions] = useState<Transaction[]>([]);
+    const [quickEntries, setQuickEntries] = useState<any[]>([]);
     
     // Optical Profile editing states
     const [isEditingOptical, setIsEditingOptical] = useState(false);
@@ -39,10 +40,11 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
 
     const loadData = async () => {
         const collName = partnerType === 'customer' ? "customers" : "suppliers";
-        const [allP, allI, allT] = await Promise.all([
+        const [allP, allI, allT, allQE] = await Promise.all([
             dbService.getAll(collName) as Promise<(Customer|Supplier)[]>,
             dbService.getAll("invoices") as Promise<Invoice[]>,
-            dbService.getAll("transactions") as Promise<Transaction[]>
+            dbService.getAll("transactions") as Promise<Transaction[]>,
+            dbService.getAll("quick_financial_entries") as Promise<any[]>
         ]);
 
         const p = allP.find(x => x.id === partnerId);
@@ -62,28 +64,44 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
 
         const filteredInvoices = allI.filter(i => i.partnerId === partnerId);
         const filteredTransactions = allT.filter(t => t.partnerId === partnerId);
+        const filteredQEs = allQE.filter(qe => qe.partnerId === partnerId);
 
         setInvoices(filteredInvoices);
         setTransactions(filteredTransactions);
+        setQuickEntries(filteredQEs);
 
         // Auto-reconcile balance to repair any historical or deleted invoice mismatches
         if (p) {
             const activeInvs = filteredInvoices.filter(i => i.recordStatus !== 'deleted' && (i.lifecycleStatus === 'معتمد' || !i.lifecycleStatus));
             const activeInvIds = new Set(activeInvs.map(i => i.id).filter(Boolean));
             
+            const activeQEs = filteredQEs.filter(qe => qe.recordStatus !== 'deleted');
+            const activeQEIds = new Set(activeQEs.map(qe => qe.id).filter(Boolean));
+
             const activeTrans = filteredTransactions.filter(t => {
                 if (t.recordStatus === 'deleted') return false;
                 if (t.sourceId && (t.sourceType === 'sales_invoice' || t.sourceType === 'purchase_invoice' || t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment')) {
-                    if (!activeInvIds.has(t.sourceId)) {
-                        return false;
+                    if (t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment') {
+                        if (!activeInvIds.has(t.sourceId) && !activeQEIds.has(t.sourceId)) {
+                            return false;
+                        }
+                    } else {
+                        if (!activeInvIds.has(t.sourceId)) {
+                            return false;
+                        }
                     }
                 }
                 return true;
             });
 
-            const totalPurch = activeInvs.reduce((acc, curr) => acc + (curr.total - (curr.discount || 0)), 0);
+            const totalPurch = activeInvs.reduce((acc, curr) => acc + (curr.total - (curr.discount || 0)), 0) +
+                activeTrans
+                    .filter(t => t.sourceType === 'quick_financial_entry')
+                    .filter(t => partnerType === 'customer' ? t.type === 'قبض' : t.type === 'صرف')
+                    .reduce((acc, curr) => acc + curr.amount, 0);
+
             const totalPay = activeTrans
-                .filter(t => t.sourceType !== 'sales_invoice' && t.sourceType !== 'purchase_invoice')
+                .filter(t => t.sourceType !== 'sales_invoice' && t.sourceType !== 'purchase_invoice' && t.sourceType !== 'quick_financial_entry')
                 .filter(t => partnerType === 'customer' 
                     ? t.type === 'قبض' 
                     : t.type === 'صرف'
@@ -135,23 +153,36 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
     const activeInvoices = invoices.filter(i => i.recordStatus !== 'deleted' && (i.lifecycleStatus === 'معتمد' || !i.lifecycleStatus));
     const activeInvoiceIds = new Set(activeInvoices.map(i => i.id).filter(Boolean));
 
+    const activeQEs = quickEntries.filter(qe => qe.recordStatus !== 'deleted');
+    const activeQEIds = new Set(activeQEs.map(qe => qe.id).filter(Boolean));
+
     const activeTransactions = transactions.filter(t => {
         if (t.recordStatus === 'deleted') return false;
         
         // Dynamic cleanup: ignore payments/receipts whose referenced invoice has been deleted
         if (t.sourceId && (t.sourceType === 'sales_invoice' || t.sourceType === 'purchase_invoice' || t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment')) {
-            if (!activeInvoiceIds.has(t.sourceId)) {
-                return false;
+            if (t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment') {
+                if (!activeInvoiceIds.has(t.sourceId) && !activeQEIds.has(t.sourceId)) {
+                    return false;
+                }
+            } else {
+                if (!activeInvoiceIds.has(t.sourceId)) {
+                    return false;
+                }
             }
         }
         return true;
     });
 
-    const totalPurchases = activeInvoices.reduce((acc, curr) => acc + (curr.total - (curr.discount || 0)), 0);
+    const totalPurchases = activeInvoices.reduce((acc, curr) => acc + (curr.total - (curr.discount || 0)), 0) +
+        activeTransactions
+            .filter(t => t.sourceType === 'quick_financial_entry')
+            .filter(t => partnerType === 'customer' ? t.type === 'قبض' : t.type === 'صرف')
+            .reduce((acc, curr) => acc + curr.amount, 0);
     
-    // Real payments received from customer or made to supplier (excluding invoice proof transactions to avoid double counting)
+    // Real payments received from customer or made to supplier (excluding invoice proof and quick entry proof transactions to avoid double counting)
     const totalPayments = activeTransactions
-        .filter(t => t.sourceType !== 'sales_invoice' && t.sourceType !== 'purchase_invoice')
+        .filter(t => t.sourceType !== 'sales_invoice' && t.sourceType !== 'purchase_invoice' && t.sourceType !== 'quick_financial_entry')
         .filter(t => partnerType === 'customer' 
             ? t.type === 'قبض' 
             : t.type === 'صرف'
@@ -182,17 +213,33 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
         let debit = 0;
         let credit = 0;
         
-        if (partnerType === 'customer') {
-            if (t.type === 'قبض') {
-                credit = t.amount;
+        if (t.sourceType === 'quick_financial_entry') {
+            if (partnerType === 'customer') {
+                if (t.type === 'قبض') {
+                    debit = t.amount;
+                } else {
+                    credit = t.amount;
+                }
             } else {
-                debit = t.amount;
+                if (t.type === 'صرف') {
+                    credit = t.amount;
+                } else {
+                    debit = t.amount;
+                }
             }
         } else {
-            if (t.type === 'صرف') {
-                debit = t.amount;
+            if (partnerType === 'customer') {
+                if (t.type === 'قبض') {
+                    credit = t.amount;
+                } else {
+                    debit = t.amount;
+                }
             } else {
-                credit = t.amount;
+                if (t.type === 'صرف') {
+                    debit = t.amount;
+                } else {
+                    credit = t.amount;
+                }
             }
         }
 
@@ -254,11 +301,16 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
             activeInvoices.some(i => i.id === t.sourceId);
         if (isInitialPayment) return;
 
+        let title = t.type === 'قبض' ? 'سند قبض نقدي' : 'سند صرف نقدي';
+        if (t.sourceType === 'quick_financial_entry') {
+            title = t.type === 'قبض' ? 'فاتورة بيع سريع' : 'فاتورة مشتريات سريعة';
+        }
+
         visualTimeline.push({
             id: t.id,
             type: 'transaction',
             date: t.createdAt,
-            title: t.type === 'قبض' ? 'سند قبض نقدي' : 'سند صرف نقدي',
+            title: title,
             description: t.description || (t.type === 'قبض' ? 'سند قبض نقدي' : 'سند صرف نقدي'),
             amount: t.amount,
         });

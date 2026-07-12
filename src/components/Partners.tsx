@@ -5,6 +5,8 @@ import { Customer, Supplier } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import { syncEngine } from "../services/syncEngine";
 import { cn, hasPermission } from "../lib/utils";
+import { calculateUnifiedPartnerBalances } from "../lib/financialUtils";
+import { Voucher } from "../types";
 
 interface PartnersProps {
     type: 'customer' | 'supplier';
@@ -15,6 +17,9 @@ import CustomerProfile from "./CustomerProfile";
 export default function Partners({ type }: PartnersProps) {
     const [partners, setPartners] = useState<(Customer | Supplier)[]>([]);
     const [invoices, setInvoices] = useState<any[]>([]);
+    const [quickEntries, setQuickEntries] = useState<any[]>([]);
+    const [allTransactions, setAllTransactions] = useState<any[]>([]);
+    const [vouchers, setVouchers] = useState<Voucher[]>([]);
     const [searchTerm, setSearchTerm] = useState("");
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingPartner, setEditingPartner] = useState<Customer | Supplier | null>(null);
@@ -45,12 +50,18 @@ export default function Partners({ type }: PartnersProps) {
     }, [type]);
 
     const loadPartners = async () => {
-        const [partnersData, invoicesData] = await Promise.all([
+        const [partnersData, invoicesData, quickEntriesData, transactionsData, vouchersData] = await Promise.all([
             dbService.getAll(collectionName),
-            dbService.getAll("invoices")
+            dbService.getAll("invoices"),
+            dbService.getAll("quick_financial_entries"),
+            dbService.getAll("transactions"),
+            dbService.getAll("vouchers")
         ]);
         setPartners(partnersData as (Customer | Supplier)[]);
         setInvoices(invoicesData as any[]);
+        setQuickEntries(quickEntriesData as any[]);
+        setAllTransactions(transactionsData as any[]);
+        setVouchers(vouchersData as Voucher[]);
     };
 
     const [isSaving, setIsSaving] = useState(false);
@@ -138,19 +149,28 @@ export default function Partners({ type }: PartnersProps) {
         setPartnerToDelete(p);
     };
 
+    const partnerTotalsMap = React.useMemo(() => {
+        const map: Record<string, { total: number, paid: number, remaining: number }> = {};
+        partners.forEach(p => {
+            map[p.id!] = { total: 0, paid: 0, remaining: p.balance || 0 };
+        });
+        return map;
+    }, [partners]);
+
     const getPartnerTotals = (partnerId: string) => {
-        const partnerInvoices = invoices.filter(inv => inv.partnerId === partnerId && inv.recordStatus !== 'deleted');
-        const total = partnerInvoices.reduce((sum, inv) => sum + (Number(inv.total || 0) - Number(inv.discount || 0)), 0);
-        const paid = partnerInvoices.reduce((sum, inv) => sum + Number(inv.paid || 0), 0);
-        const remaining = total - paid;
-        return { total, paid, remaining };
+        return partnerTotalsMap[partnerId] || { total: 0, paid: 0, remaining: 0 };
     };
 
     const handlePrintAll = async () => {
         setIsPrinting(true);
         try {
-            const allTransactions = await dbService.getAll("transactions") as any[];
+            const [allTransactions, allQuickEntries] = await Promise.all([
+                dbService.getAll("transactions"),
+                dbService.getAll("quick_financial_entries")
+            ]) as [any[], any[]];
             
+            const activeQEIds = new Set(allQuickEntries.filter(qe => qe.recordStatus !== 'deleted').map(qe => qe.id).filter(Boolean));
+
             const printWindow = window.open("", "_blank");
             if (!printWindow) {
                 alert("يرجى السماح بفتح النوافذ المنبثقة للطباعة");
@@ -190,8 +210,14 @@ export default function Partners({ type }: PartnersProps) {
                 const partnerTransactions = allTransactions.filter(t => {
                     if (t.partnerId !== p.id || t.recordStatus === 'deleted') return false;
                     if (t.sourceId && (t.sourceType === 'sales_invoice' || t.sourceType === 'purchase_invoice' || t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment')) {
-                        if (!activeInvoiceIds.has(t.sourceId)) {
-                            return false;
+                        if (t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment') {
+                            if (!activeInvoiceIds.has(t.sourceId) && !activeQEIds.has(t.sourceId)) {
+                                return false;
+                            }
+                        } else {
+                            if (!activeInvoiceIds.has(t.sourceId)) {
+                                return false;
+                            }
                         }
                     }
                     return true;
@@ -214,17 +240,33 @@ export default function Partners({ type }: PartnersProps) {
                     let debit = 0;
                     let credit = 0;
                     
-                    if (isCustomer) {
-                        if (t.type === 'قبض') {
-                            credit = t.amount;
+                    if (t.sourceType === 'quick_financial_entry') {
+                        if (isCustomer) {
+                            if (t.type === 'قبض') {
+                                debit = t.amount;
+                            } else {
+                                credit = t.amount;
+                            }
                         } else {
-                            debit = t.amount;
+                            if (t.type === 'صرف') {
+                                credit = t.amount;
+                            } else {
+                                debit = t.amount;
+                            }
                         }
                     } else {
-                        if (t.type === 'صرف') {
-                            debit = t.amount;
+                        if (isCustomer) {
+                            if (t.type === 'قبض') {
+                                credit = t.amount;
+                            } else {
+                                debit = t.amount;
+                            }
                         } else {
-                            credit = t.amount;
+                            if (t.type === 'صرف') {
+                                debit = t.amount;
+                            } else {
+                                credit = t.amount;
+                            }
                         }
                     }
 

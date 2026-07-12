@@ -217,7 +217,7 @@ export default function Reports() {
                                         <h3 className="text-xs font-black text-emerald-50">صافي الأرباح — {timeRangeLabel}</h3>
                                     </div>
                                     <div className="text-2xl font-black font-mono break-all leading-none">
-                                        {netProfitInYer.toLocaleString()} <span className="text-[10px] opacity-80">YER</span>
+                                        {profitsInYer.toLocaleString()} <span className="text-[10px] opacity-80">YER</span>
                                     </div>
                                 </div>
                             </div>
