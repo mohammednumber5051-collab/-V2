@@ -107,10 +107,10 @@ export const dbService = {
         // Save the invoice
         batch.set(invRef, cleanData({ ...invoice, id: invRef.id, isSystemFixed: true, createdAt: new Date().toISOString() }));
         
-        // Update partner balance (use net amount = total - discount, minus paid)
+        // Update partner balance
         if (partnerId) {
             const partnerColl = type.includes('sale') ? 'customers' : 'suppliers';
-            let balChange = (invoice.total - (invoice.discount || 0)) - invoice.paid;
+            let balChange = invoice.total - invoice.paid;
             if (type.includes('return')) balChange = -balChange;
             batch.update(doc(db, partnerColl, partnerId), { balance: increment(balChange) });
         }
@@ -159,17 +159,16 @@ export const dbService = {
             batch.update(doc(db, "cashBoxes", invoice.boxId), { balance: increment(-boxChange) });
         }
 
-        // Revert partner balance (use net amount = total - discount, minus paid)
+        // Revert partner balance
         if (invoice.partnerId) {
             const partnerColl = type.includes('sale') ? 'customers' : 'suppliers';
-            const netRemaining = (invoice.total - (invoice.discount || 0)) - invoice.paid;
             let balChange = 0;
             if (isFixed) {
-                balChange = netRemaining;
+                balChange = invoice.total - invoice.paid;
                 if (type.includes('return')) balChange = -balChange;
             } else {
                 const baseType = type.replace('_return', '');
-                balChange = baseType === 'sale' ? -netRemaining : netRemaining;
+                balChange = baseType === 'sale' ? -(invoice.total - invoice.paid) : (invoice.total - invoice.paid);
                 if (type.includes('return')) balChange = -balChange;
             }
             batch.update(doc(db, partnerColl, invoice.partnerId), { balance: increment(-balChange) });
@@ -238,20 +237,19 @@ export const dbService = {
         const partnerChanges = { customers: {}, suppliers: {} };
         if (oldInvoice.partnerId) {
             const oldPartnerColl = oldType.includes('sale') ? 'customers' : 'suppliers';
-            const oldNetRemaining = (oldInvoice.total - (oldInvoice.discount || 0)) - oldInvoice.paid;
             let oldBalChange = 0;
             if (isOldFixed) {
-                oldBalChange = oldNetRemaining;
+                oldBalChange = oldInvoice.total - oldInvoice.paid;
                 if (oldType.includes('return')) oldBalChange = -oldBalChange;
             } else {
-                oldBalChange = oldBaseType === 'sale' ? -oldNetRemaining : oldNetRemaining;
+                oldBalChange = oldBaseType === 'sale' ? -(oldInvoice.total - oldInvoice.paid) : (oldInvoice.total - oldInvoice.paid);
                 if (oldType.includes('return')) oldBalChange = -oldBalChange;
             }
             partnerChanges[oldPartnerColl][oldInvoice.partnerId] = (partnerChanges[oldPartnerColl][oldInvoice.partnerId] || 0) - oldBalChange;
         }
         if (newInvoice.partnerId) {
             const newPartnerColl = newType.includes('sale') ? 'customers' : 'suppliers';
-            let newBalChange = (newInvoice.total - (newInvoice.discount || 0)) - newInvoice.paid;
+            let newBalChange = newInvoice.total - newInvoice.paid;
             if (newType.includes('return')) newBalChange = -newBalChange;
             partnerChanges[newPartnerColl][newInvoice.partnerId] = (partnerChanges[newPartnerColl][newInvoice.partnerId] || 0) + newBalChange;
         }
@@ -363,9 +361,7 @@ export const dbService = {
         } else {
             if (trans.partnerId) {
                 const partnerColl = (trans.type === "قبض" || trans.type === "customer_receipt") ? "customers" : "suppliers";
-                // Reverse the original addTransaction sign: قبض added -amount, so reversal adds +amount; صرف added +amount, so reversal adds -amount
-                const revertSign = (trans.type === "قبض" || trans.type === "customer_receipt") ? trans.amount : -trans.amount;
-                batch.update(doc(db, partnerColl, trans.partnerId), { balance: increment(revertSign) });
+                batch.update(doc(db, partnerColl, trans.partnerId), { balance: increment(trans.amount) });
             }
             if (trans.boxId) {
                 const change = (trans.type === "قبض" || trans.type === "customer_receipt") ? trans.amount : -trans.amount;
@@ -472,8 +468,7 @@ export const dbService = {
             if (voucher.partnerType === 'customer') {
                 balChange = voucher.type === 'receipt' ? -voucher.amount : voucher.amount;
             } else {
-                // Supplier: payment reduces payables (-), receipt from supplier increases payables (+)
-                balChange = voucher.type === 'payment' ? -voucher.amount : voucher.amount;
+                balChange = -voucher.amount;
             }
             batch.update(doc(db, partnerColl, voucher.partnerId), {
                 balance: increment(balChange)
@@ -512,8 +507,7 @@ export const dbService = {
             if (oldVoucher.partnerType === 'customer') {
                 oldBalChange = oldVoucher.type === 'receipt' ? -oldVoucher.amount : oldVoucher.amount;
             } else {
-                // Supplier: payment reduces payables (-), receipt from supplier increases payables (+)
-                oldBalChange = oldVoucher.type === 'payment' ? -oldVoucher.amount : oldVoucher.amount;
+                oldBalChange = -oldVoucher.amount;
             }
             batch.update(doc(db, partnerColl, oldVoucher.partnerId), {
                 balance: increment(-oldBalChange)
@@ -526,8 +520,7 @@ export const dbService = {
             if (newVoucher.partnerType === 'customer') {
                 newBalChange = newVoucher.type === 'receipt' ? -newVoucher.amount : newVoucher.amount;
             } else {
-                // Supplier: payment reduces payables (-), receipt from supplier increases payables (+)
-                newBalChange = newVoucher.type === 'payment' ? -newVoucher.amount : newVoucher.amount;
+                newBalChange = -newVoucher.amount;
             }
             batch.update(doc(db, partnerColl, newVoucher.partnerId), {
                 balance: increment(newBalChange)
@@ -550,8 +543,7 @@ export const dbService = {
             if (voucher.partnerType === 'customer') {
                 balChange = voucher.type === 'receipt' ? -voucher.amount : voucher.amount;
             } else {
-                // Supplier: payment reduces payables (-), receipt from supplier increases payables (+)
-                balChange = voucher.type === 'payment' ? -voucher.amount : voucher.amount;
+                balChange = -voucher.amount;
             }
             batch.update(doc(db, partnerColl, voucher.partnerId), {
                 balance: increment(-balChange)
@@ -578,273 +570,9 @@ export const dbService = {
         }
     },
     async recalculateFinancials() {
-        const batch = writeBatch(db);
-        
-        // Fetch all source documents needed for recalculation
-        const [
-            invoicesSnap, customersSnap, suppliersSnap, productsSnap,
-            cashBoxesSnap, transactionsSnap, vouchersSnap, quickEntriesSnap
-        ] = await Promise.all([
-            getDocs(collection(db, "invoices")),
-            getDocs(collection(db, "customers")),
-            getDocs(collection(db, "suppliers")),
-            getDocs(collection(db, "products")),
-            getDocs(collection(db, "cashBoxes")),
-            getDocs(collection(db, "transactions")),
-            getDocs(collection(db, "vouchers")),
-            getDocs(collection(db, "quick_financial_entries")),
-        ]);
-
-        const invoices = invoicesSnap.docs.map(d => ({ ...d.data(), id: d.id } as any));
-        const customers = customersSnap.docs.map(d => ({ ...d.data(), id: d.id } as any));
-        const suppliers = suppliersSnap.docs.map(d => ({ ...d.data(), id: d.id } as any));
-        const products = productsSnap.docs.map(d => ({ ...d.data(), id: d.id } as any));
-        const cashBoxes = cashBoxesSnap.docs.map(d => ({ ...d.data(), id: d.id } as any));
-        const transactions = transactionsSnap.docs.map(d => ({ ...d.data(), id: d.id } as any));
-        const vouchers = vouchersSnap.docs.map(d => ({ ...d.data(), id: d.id } as any));
-        const quickEntries = quickEntriesSnap.docs.map(d => ({ ...d.data(), id: d.id } as any));
-
-        let docsUpdatedCount = 0;
-
-        // 1. First, correct legacy invoices (so they are system fixed and have partnerId set)
-        for (const invoice of invoices) {
-            if (invoice.recordStatus === 'deleted') continue;
-            if (invoice.isSystemFixed) continue;
-
-            const type = invoice.type || 'sale';
-            const baseType = type.replace('_return', '');
-            
-            let partnerId = invoice.partnerId;
-
-            // Step A: Auto-create customer/supplier if they were not created or linked
-            if (!partnerId && invoice.partnerName) {
-                const partnerColl = type.includes('sale') ? 'customers' : 'suppliers';
-                const existingList = type.includes('sale') ? customers : suppliers;
-                const match = existingList.find(p => p.name?.trim() === invoice.partnerName?.trim());
-
-                if (match) {
-                    partnerId = match.id;
-                } else {
-                    const partnerRef = doc(collection(db, partnerColl));
-                    partnerId = partnerRef.id;
-                    const newPartner = {
-                        id: partnerId,
-                        name: invoice.partnerName,
-                        phone: invoice.partnerPhone || "",
-                        balance: 0,
-                        recordStatus: 'active',
-                        createdAt: invoice.createdAt || new Date().toISOString(),
-                        updatedAt: new Date().toISOString()
-                    };
-                    batch.set(partnerRef, cleanData(newPartner));
-                    
-                    existingList.push(newPartner);
-                }
-                invoice.partnerId = partnerId;
-            }
-
-            // Step B: Correct Product Stock (revert legacy bugged stock change and apply correct one)
-            if (invoice.items && invoice.items.length > 0) {
-                for (const item of invoice.items) {
-                    if (item.productId && item.productId !== "ledger_entry_item") {
-                        const productExists = products.some(p => p.id === item.productId);
-                        if (productExists) {
-                            const qty = Number(item.quantity || 0);
-                            let buggedStock = baseType === 'sale' ? qty : -qty;
-                            if (type.includes('return')) buggedStock = -buggedStock;
-
-                            let correctStock = baseType === 'sale' ? -qty : qty;
-                            if (type.includes('return')) correctStock = -correctStock;
-
-                            const correction = correctStock - buggedStock;
-                            if (correction !== 0) {
-                                batch.update(doc(db, "products", item.productId), { stock: increment(correction) });
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Step C: Mark the invoice as corrected and save in memory
-            invoice.isSystemFixed = true;
-            batch.update(doc(db, "invoices", invoice.id), {
-                isSystemFixed: true,
-                partnerId: partnerId || "",
-                updatedAt: new Date().toISOString()
-            });
-
-            docsUpdatedCount++;
-        }
-
-        // 2. Initialize computed balances maps to 0 for everyone
-        const computedBoxBalances: Record<string, number> = {};
-        const computedCustomerBalances: Record<string, number> = {};
-        const computedSupplierBalances: Record<string, number> = {};
-
-        cashBoxes.forEach(b => { computedBoxBalances[b.id] = 0; });
-        customers.forEach(c => { computedCustomerBalances[c.id] = 0; });
-        suppliers.forEach(s => { computedSupplierBalances[s.id] = 0; });
-
-        // 3. Process Invoices
-        for (const invoice of invoices) {
-            if (invoice.recordStatus === 'deleted') continue;
-
-            const type = invoice.type || 'sale';
-            const baseType = type.replace('_return', '');
-            const paid = Number(invoice.paid || 0);
-            const total = Number(invoice.total || 0);
-
-            // CashBox impact
-            if (invoice.boxId && paid > 0) {
-                let boxChange = baseType === 'sale' ? paid : -paid;
-                if (type.includes('return')) boxChange = -boxChange;
-                computedBoxBalances[invoice.boxId] = (computedBoxBalances[invoice.boxId] || 0) + boxChange;
-            }
-
-            // Partner balance impact (net = total - discount - paid)
-            if (invoice.partnerId) {
-                const discount = Number(invoice.discount || 0);
-                let balChange = (total - discount) - paid;
-                if (type.includes('return')) balChange = -balChange;
-
-                if (type.includes('sale')) {
-                    computedCustomerBalances[invoice.partnerId] = (computedCustomerBalances[invoice.partnerId] || 0) + balChange;
-                } else {
-                    computedSupplierBalances[invoice.partnerId] = (computedSupplierBalances[invoice.partnerId] || 0) + balChange;
-                }
-            }
-        }
-
-        // 4. Process Quick Financial Entries
-        // (partner balance = remainingAmount, cashbox = paidAmount — read directly from source)
-        for (const entry of quickEntries) {
-            if (entry.recordStatus === 'deleted') continue;
-
-            const paidAmount = Number(entry.paidAmount || 0);
-            const remainingAmount = Number(entry.remainingAmount || 0);
-            const isIncoming = entry.entryType === 'manual_sale' || entry.entryType === 'receipt';
-
-            // CashBox impact
-            if (entry.cashBoxId && paidAmount > 0) {
-                const boxChange = isIncoming ? paidAmount : -paidAmount;
-                computedBoxBalances[entry.cashBoxId] = (computedBoxBalances[entry.cashBoxId] || 0) + boxChange;
-            }
-
-            // Partner balance impact
-            if (entry.partnerId && entry.partnerType !== 'none' && remainingAmount !== 0) {
-                const partnerColl = isIncoming ? 'customers' : 'suppliers';
-                if (partnerColl === 'customers') {
-                    computedCustomerBalances[entry.partnerId] = (computedCustomerBalances[entry.partnerId] || 0) + remainingAmount;
-                } else {
-                    computedSupplierBalances[entry.partnerId] = (computedSupplierBalances[entry.partnerId] || 0) + remainingAmount;
-                }
-            }
-        }
-
-        // 5. Process standalone Transactions only (skip auto-generated ones from invoices/quick entries)
-        // Auto-generated transactions have a non-empty sourceId; their impacts are already
-        // counted from their source documents (invoices, quick entries) above.
-        // Only include: transfers, and manually-added transactions (no sourceId).
-        for (const trans of transactions) {
-            if (trans.recordStatus === 'deleted') continue;
-            // Skip auto-generated transactions — sourceId links them to an invoice or quick entry
-            if (trans.sourceId && trans.type !== 'تحويل') continue;
-
-            const type = trans.type || '';
-            const amount = Number(trans.amount || 0);
-
-            // CashBox impact
-            if (type === 'تحويل') {
-                if (trans.fromBoxId) {
-                    computedBoxBalances[trans.fromBoxId] = (computedBoxBalances[trans.fromBoxId] || 0) - amount;
-                }
-                if (trans.toBoxId) {
-                    computedBoxBalances[trans.toBoxId] = (computedBoxBalances[trans.toBoxId] || 0) + amount;
-                }
-            } else if (trans.boxId) {
-                const boxChange = (type.includes('قبض') || type === 'customer_receipt') ? amount : -amount;
-                computedBoxBalances[trans.boxId] = (computedBoxBalances[trans.boxId] || 0) + boxChange;
-            }
-
-            // Partner balance impact (only for manual standalone transactions)
-            if (trans.partnerId && type !== 'تحويل') {
-                const isCustomer = type.includes('customer') || type === 'قبض';
-                const balChange = (type.includes('قبض') || type === 'customer_receipt') ? -amount : amount;
-
-                if (isCustomer) {
-                    computedCustomerBalances[trans.partnerId] = (computedCustomerBalances[trans.partnerId] || 0) + balChange;
-                } else {
-                    computedSupplierBalances[trans.partnerId] = (computedSupplierBalances[trans.partnerId] || 0) + balChange;
-                }
-            }
-        }
-
-        // 6. Process Vouchers (receipts/payments) — cashbox and partner balance
-        for (const voucher of vouchers) {
-            if (voucher.recordStatus === 'deleted') continue;
-
-            const type = voucher.type || '';
-            const amount = Number(voucher.amount || 0);
-
-            // CashBox impact
-            if (voucher.boxId) {
-                const boxChange = type === 'receipt' ? amount : -amount;
-                computedBoxBalances[voucher.boxId] = (computedBoxBalances[voucher.boxId] || 0) + boxChange;
-            }
-
-            // Partner balance impact (matches addVoucher / updateVoucher logic in db.ts)
-            if (voucher.partnerId && voucher.partnerType && voucher.partnerType !== 'none') {
-                // receipt = we received money → customer balance -amount, supplier balance +amount
-                // payment = we paid money → customer balance +amount, supplier balance -amount
-                if (voucher.partnerType === 'customer') {
-                    const balChange = type === 'receipt' ? -amount : amount;
-                    computedCustomerBalances[voucher.partnerId] = (computedCustomerBalances[voucher.partnerId] || 0) + balChange;
-                } else if (voucher.partnerType === 'supplier') {
-                    const balChange = type === 'receipt' ? amount : -amount;
-                    computedSupplierBalances[voucher.partnerId] = (computedSupplierBalances[voucher.partnerId] || 0) + balChange;
-                }
-            }
-        }
-
-        // 6. Queue batch sets with merge: true for all entities (prevents "No document to update" errors entirely)
-        for (const [boxId, bal] of Object.entries(computedBoxBalances)) {
-            const existingBox = cashBoxes.find(b => b.id === boxId);
-            batch.set(doc(db, "cashBoxes", boxId), {
-                id: boxId,
-                name: existingBox?.name || (boxId === 'main-box' ? "الصندوق الرئيسي" : "صندوق افتراضي"),
-                balance: bal,
-                recordStatus: existingBox?.recordStatus || 'active',
-                createdAt: existingBox?.createdAt || new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-            }, { merge: true });
-        }
-
-        for (const [custId, bal] of Object.entries(computedCustomerBalances)) {
-            const existingCust = customers.find(c => c.id === custId);
-            batch.set(doc(db, "customers", custId), {
-                id: custId,
-                name: existingCust?.name || "عميل افتراضي",
-                balance: bal,
-                recordStatus: existingCust?.recordStatus || 'active',
-                createdAt: existingCust?.createdAt || new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-            }, { merge: true });
-        }
-
-        for (const [suppId, bal] of Object.entries(computedSupplierBalances)) {
-            const existingSupp = suppliers.find(s => s.id === suppId);
-            batch.set(doc(db, "suppliers", suppId), {
-                id: suppId,
-                name: existingSupp?.name || "مورد افتراضي",
-                balance: bal,
-                recordStatus: existingSupp?.recordStatus || 'active',
-                createdAt: existingSupp?.createdAt || new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-            }, { merge: true });
-        }
-
-        await batch.commit();
-        console.log(`[dbService] Completed comprehensive recalculation: fixed ${docsUpdatedCount} legacy invoices, rebuilt ${Object.keys(computedBoxBalances).length} cashbox balances, ${Object.keys(computedCustomerBalances).length} customer balances, and ${Object.keys(computedSupplierBalances).length} supplier balances.`);
+        const result = await FinancialExecutionEngine.rebuildFinancialState();
+        await localDbService.clearLocalData();
+        return result;
     },
     async resetAllFinancialData() {
         // Clear EVERYTHING in localStorage
