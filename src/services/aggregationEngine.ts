@@ -97,13 +97,8 @@ export class AggregationEngine {
         addField(impact.quickEntriesCount, 'totalQuickEntries', false, false, true);
 
         // Daily todaySales / Month monthSales for dashboard
-        // IMPORTANT: use the same local-timezone offset as dateStr so the comparison
-        // is correct even when the wall-clock crosses midnight UTC but not locally.
         if (impact.salesTotal && impact.salesTotal !== 0) {
-            const nowRef = new Date();
-            const nowOffset = nowRef.getTimezoneOffset() * 60000;
-            const localNow = new Date(nowRef.getTime() - nowOffset);
-            const today = localNow.toISOString().split('T')[0]; // local YYYY-MM-DD
+            const today = new Date().toISOString().split('T')[0];
             if (dateStr === today) {
                 dashboardUpdates.todaySales = increment(impact.salesTotal);
                 updateDashboard = true;

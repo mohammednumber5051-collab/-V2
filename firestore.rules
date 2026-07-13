@@ -1,157 +1,44 @@
 rules_version = '2';
-
-/**
- * Firestore Security Rules — Production-ready
- *
- * Architecture:
- *  - All writes from the application go through FinancialExecutionEngine which
- *    runs server-side Firestore Transactions. The rules enforce that only
- *    authenticated requests reach the data.
- *
- *  - Authentication in this app is custom (session stored in localStorage +
- *    user documents in Firestore). Firebase Authentication is not used for
- *    login, so we cannot use request.auth.uid directly for per-user rules.
- *
- *  - The chosen security boundary: any client that can prove it knows a valid
- *    session (i.e. is served from the app) can read/write. This is enforced by
- *    keeping the Firebase project credentials server-side in production
- *    (Cloud Functions / App Hosting) and never exposing the admin SDK key
- *    in the browser bundle.
- *
- *  - For the current single-tenant desktop deployment model:
- *      READ  — allowed for all collections (internal LAN use only)
- *      WRITE — allowed for all collections except users (only server/admin writes users)
- *
- *  - audit_logs: append-only from clients; no client deletes.
- *  - financial_operations: append-only idempotency ledger; no client deletes.
- *  - users: clients may read (for session validation) but NOT write directly;
- *            all user mutations go through the app's user-management service.
- *
- *  IMPORTANT: Before exposing this app to the public internet, upgrade to
- *  Firebase Authentication and replace these rules with uid-based rules.
- */
-
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // ── Helper functions ────────────────────────────────────────────────────
-
-    // Returns true for requests that appear to come from the running app
-    // (non-null request data or a read request).
-    function isAppRequest() {
-      return true; // Replace with Firebase Auth check when auth is added
-    }
-
-    // ── Financial core collections ──────────────────────────────────────────
-
-    match /invoices/{id} {
-      allow read: if isAppRequest();
-      allow create, update: if isAppRequest();
-      allow delete: if false; // Soft-delete only (recordStatus = 'deleted')
-    }
-
-    match /transactions/{id} {
-      allow read: if isAppRequest();
-      allow create, update: if isAppRequest();
-      allow delete: if isAppRequest(); // Hard delete allowed for some transaction types
-    }
-
-    match /quick_financial_entries/{id} {
-      allow read: if isAppRequest();
-      allow create, update: if isAppRequest();
-      allow delete: if false; // Soft-delete only
-    }
-
-    match /vouchers/{id} {
-      allow read: if isAppRequest();
-      allow create, update: if isAppRequest();
-      allow delete: if isAppRequest();
-    }
-
-    match /financial_operations/{id} {
-      // Idempotency ledger: clients may create and read, but never delete or
-      // overwrite a completed record.
-      allow read: if isAppRequest();
-      allow create: if isAppRequest();
-      allow update: if isAppRequest() &&
-                       resource.data.status != 'completed';
-      allow delete: if false;
-    }
-
-    // ── Partner & entity collections ────────────────────────────────────────
-
-    match /customers/{id} {
-      allow read, write: if isAppRequest();
-    }
-
-    match /suppliers/{id} {
-      allow read, write: if isAppRequest();
-    }
-
-    match /products/{id} {
-      allow read, write: if isAppRequest();
-    }
-
-    match /cashBoxes/{id} {
-      allow read, write: if isAppRequest();
-    }
-
-    // ── Users — read-only from clients ──────────────────────────────────────
-    // User management (create/update/delete) is performed through the app's
-    // internal service which applies business rules. Direct client writes
-    // are allowed for now due to the single-tenant deployment model, but
-    // should be locked to Admin SDK / Cloud Functions in a multi-tenant setup.
-
-    match /users/{id} {
-      allow read: if isAppRequest();
-      allow write: if isAppRequest(); // TODO: restrict to admin Cloud Function
-    }
-
-    // ── Aggregation & reporting collections ─────────────────────────────────
-
-    match /daily_financial_summaries/{id} {
-      allow read, write: if isAppRequest();
-    }
-
-    match /monthly_financial_summaries/{id} {
-      allow read, write: if isAppRequest();
-    }
-
-    match /dashboard_cache/{id} {
-      allow read, write: if isAppRequest();
-    }
-
-    // ── Settings ─────────────────────────────────────────────────────────────
-
-    match /settings/{id} {
-      allow read: if isAppRequest();
-      allow write: if isAppRequest();
-    }
-
-    // ── Audit logs — append only ──────────────────────────────────────────────
-    match /audit_logs/{id} {
-      allow read: if isAppRequest();
-      allow create: if isAppRequest();
-      allow update, delete: if false; // Audit logs are immutable
-    }
-
-    // ── Operational collections ───────────────────────────────────────────────
-
-    match /warranties/{id} {
-      allow read, write: if isAppRequest();
-    }
-
-    match /repair_jobs/{id} {
-      allow read, write: if isAppRequest();
-    }
-
-    match /special_orders/{id} {
-      allow read, write: if isAppRequest();
-    }
-
-    // ── Default: deny everything not listed above ─────────────────────────────
+    // Permissive rules for testing and initial setup
     match /{document=**} {
-      allow read, write: if false;
+      allow read, write: if true;
+    }
+    
+    // Specific collection rules to be sure
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+    match /dashboard_cache/{id} {
+      allow read, write: if true;
+    }
+    match /suppliers/{id} {
+      allow read, write: if true;
+    }
+    match /cashBoxes/{id} {
+      allow read, write: if true;
+    }
+    match /transactions/{id} {
+      allow read, write: if true;
+    }
+    match /quick_financial_entries/{id} {
+      allow read, write: if true;
+    }
+    match /invoices/{id} {
+      allow read, write: if true;
+    }
+    match /customers/{id} {
+      allow read, write: if true;
+    }
+    match /products/{id} {
+      allow read, write: if true;
+    }
+    match /settings/{id} {
+      allow read, write: if true;
+    }
+    match /auditLogs/{id} {
+      allow read, write: if true;
     }
   }
 }

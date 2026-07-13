@@ -7,9 +7,18 @@ export enum OperationType {
     WRITE = 'write',
 }
 
-// AggregationImpact is the canonical definition in aggregationEngine.ts
-// Re-exported here for convenience so existing imports from types.ts continue to work.
-export type { AggregationImpact } from "./services/aggregationEngine";
+export interface AggregationImpact {
+    salesTotal?: number;
+    purchasesTotal?: number;
+    receiptsTotal?: number;
+    paymentsTotal?: number;
+    expensesTotal?: number;
+    profitsTotal?: number;
+    receivablesChange?: number;
+    payablesChange?: number;
+    cashBalanceChange?: number;
+    transactionCount?: number;
+}
 
 export type EntityType = 'sale' | 'purchase' | 'sale_return' | 'purchase_return';
 export type TransactionType = 'قبض' | 'صرف' | 'customer_receipt' | 'supplier_payment';
@@ -400,10 +409,6 @@ export interface Voucher {
     boxId: string;
     boxName: string;
     notes?: string;
-    /** Firestore document ID of the transaction record created alongside this voucher */
-    transactionId?: string;
-    /** When set on a receipt voucher, ADD_VOUCHER will update the linked invoice paid/status */
-    invoiceId?: string;
     createdBy?: string;
     updatedBy?: string;
     createdAt: string;

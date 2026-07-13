@@ -44,7 +44,8 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
     }, [propCurrentUser]);
 
     const [invoices, setInvoices] = useState<Invoice[]>([]);
-    const [displayCount, setDisplayCount] = useState(25);  // client-side pagination window
+    const [lastInvoiceDoc, setLastInvoiceDoc] = useState<any>(null);
+    const [hasMoreInvoices, setHasMoreInvoices] = useState(true);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     
     const [products, setProducts] = useState<Product[]>([]);
@@ -266,16 +267,25 @@ const lensTypeOptions = [
         }
     };
 
-    const loadInvoices = async () => {
-        setIsLoadingMore(true);
+    const loadInvoices = async (reset: boolean = false) => {
+        if (reset) {
+            setInvoices([]);
+            setLastInvoiceDoc(null);
+        } else {
+            setIsLoadingMore(true);
+        }
+        
         try {
-            // Fetch ALL invoices and filter by type client-side.
-            // This ensures every invoice is visible regardless of Firestore document-ID
-            // ordering or any date filter that was previously active, and avoids the
-            // composite-index requirement of a type-filtered + ordered Firestore query.
-            const all = await dbService.getAll("invoices");
-            setInvoices((all as Invoice[]).filter(inv => inv.type === type));
-            setDisplayCount(25);  // reset display window on fresh load
+            const res = await dbService.getPaginated("invoices", 25, reset ? null : lastInvoiceDoc, [{ field: 'type', op: '==', value: type }]);
+            setInvoices(prev => {
+                const newData = res.data as Invoice[];
+                if (reset) return newData;
+                const existingIds = new Set(prev.map(i => i.id).filter(Boolean));
+                const filteredNew = newData.filter(i => !existingIds.has(i.id));
+                return [...prev, ...filteredNew];
+            });
+            setLastInvoiceDoc(res.lastDoc);
+            setHasMoreInvoices(res.hasMore);
         } catch (error) {
             console.error("Failed to load invoices", error);
         } finally {
@@ -285,7 +295,7 @@ const lensTypeOptions = [
 
     const loadData = async () => {
         loadStaticData();
-        loadInvoices();
+        loadInvoices(true);
     };
 
     const handleSearchPartnerChange = (val: string) => {
@@ -739,7 +749,7 @@ const lensTypeOptions = [
     };
 
     const [statusFilter, setStatusFilter] = useState<'الكل' | InvoiceStatus>('الكل');
-    const [dateFilterType, setDateFilterType] = useState<'today' | 'specific_date' | 'date_range' | 'all'>('all');
+    const [dateFilterType, setDateFilterType] = useState<'today' | 'specific_date' | 'date_range' | 'all'>('today');
     const [filterSpecificDate, setFilterSpecificDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
     const [filterStartDate, setFilterStartDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
     const [filterEndDate, setFilterEndDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
@@ -790,10 +800,6 @@ const lensTypeOptions = [
         paid: filteredInvoices.reduce((acc, inv) => acc + (inv.paid || 0), 0),
         remaining: filteredInvoices.reduce((acc, inv) => acc + ((inv.total - (inv.discount || 0)) - (inv.paid || 0)), 0)
     };
-
-    // Client-side pagination — stats above see all filtered invoices; the grid shows a window
-    const visibleInvoices = filteredInvoices.slice(0, displayCount);
-    const hasMoreInvoices = filteredInvoices.length > displayCount;
 
     // Bilingual labels database
     const t = {
@@ -1130,7 +1136,7 @@ const lensTypeOptions = [
 
             {/* List Table Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                {visibleInvoices.map((inv) => {
+                {filteredInvoices.map((inv) => {
                     const netTotal = (inv.total || 0) - (inv.discount || 0);
                     const remaining = Math.max(0, netTotal - (inv.paid || 0));
                     return (
@@ -1252,11 +1258,11 @@ const lensTypeOptions = [
             {hasMoreInvoices && (
                 <div className="flex justify-center mt-6 pb-24">
                     <button
-                        onClick={() => setDisplayCount(prev => prev + 25)}
+                        onClick={() => loadInvoices(false)}
                         disabled={isLoadingMore}
                         className="px-6 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl font-bold text-sm hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors disabled:opacity-50 shadow-sm"
                     >
-                        {isLoadingMore ? "جاري التحميل..." : `تحميل المزيد (${filteredInvoices.length - displayCount} متبقية)`}
+                        {isLoadingMore ? "جاري التحميل..." : "تحميل المزيد"}
                     </button>
                 </div>
             )}

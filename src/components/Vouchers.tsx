@@ -10,7 +10,6 @@ export default function Vouchers({ currentUser }: { currentUser: AppUser }) {
     const [vouchers, setVouchers] = useState<Voucher[]>([]);
     const [cashBoxes, setCashBoxes] = useState<CashBox[]>([]);
     const [partners, setPartners] = useState<(Customer | Supplier)[]>([]);
-    const [invoicesList, setInvoicesList] = useState<any[]>([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingVoucher, setEditingVoucher] = useState<Voucher | null>(null);
     const [form, setForm] = useState<Partial<Voucher>>({ type: 'receipt', currency: 'YER' });
@@ -31,17 +30,15 @@ export default function Vouchers({ currentUser }: { currentUser: AppUser }) {
     }, []);
 
     const loadData = async () => {
-        const [v, boxes, customers, suppliers, invs] = await Promise.all([
+        const [v, boxes, customers, suppliers] = await Promise.all([
             dbService.getAll("vouchers"),
             dbService.getAll("cashBoxes"),
             dbService.getAll("customers"),
-            dbService.getAll("suppliers"),
-            dbService.getAll("invoices")
+            dbService.getAll("suppliers")
         ]);
         setVouchers(v as Voucher[]);
         setCashBoxes(boxes as CashBox[]);
         setPartners([...(customers as Customer[]).map(c => ({...c, partnerType: 'customer'})), ...(suppliers as Supplier[]).map(s => ({...s, partnerType: 'supplier'}))] as any[]);
-        setInvoicesList(invs as any[]);
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -237,36 +234,10 @@ export default function Vouchers({ currentUser }: { currentUser: AppUser }) {
                                 <option value="payment">صرف</option>
                             </select>
                             <input type="number" placeholder="المبلغ" required className="w-full p-2 border rounded-xl text-sm" value={form.amount || ''} onChange={e => setForm(prev => ({ ...prev, amount: Number(e.target.value) }))} />
-                            <select required className="w-full p-2 border rounded-xl text-sm" value={form.partnerId || ''} onChange={e => { const p = partners.find(p => p.id === e.target.value) as any; setForm(prev => ({ ...prev, partnerId: e.target.value, partnerName: p?.name || '', partnerType: p?.partnerType || 'none', invoiceId: undefined })) }}>
+                            <select required className="w-full p-2 border rounded-xl text-sm" value={form.partnerId || ''} onChange={e => { const p = partners.find(p => p.id === e.target.value) as any; setForm(prev => ({ ...prev, partnerId: e.target.value, partnerName: p?.name || '', partnerType: p?.partnerType || 'none' })) }}>
                                 <option value="">-- اختر الحساب --</option>
                                 {partners.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                             </select>
-                            {/* Invoice link — only shown for receipt vouchers to customers with outstanding invoices */}
-                            {form.type === 'receipt' && form.partnerType === 'customer' && form.partnerId && (() => {
-                                const outstanding = invoicesList.filter(inv =>
-                                    inv.partnerId === form.partnerId &&
-                                    inv.recordStatus !== 'deleted' &&
-                                    inv.status !== 'مدفوع'
-                                );
-                                if (outstanding.length === 0) return null;
-                                return (
-                                    <select
-                                        className="w-full p-2 border rounded-xl text-sm bg-amber-50 border-amber-200"
-                                        value={form.invoiceId || ''}
-                                        onChange={e => setForm(prev => ({ ...prev, invoiceId: e.target.value || undefined }))}
-                                    >
-                                        <option value="">-- ربط بفاتورة (اختياري) --</option>
-                                        {outstanding.map(inv => {
-                                            const remaining = ((inv.total || 0) - (inv.discount || 0)) - (inv.paid || 0);
-                                            return (
-                                                <option key={inv.id} value={inv.id}>
-                                                    فاتورة #{inv.invoiceNumber || inv.id?.slice(0, 8)} — متبقي: {Math.max(0, remaining).toLocaleString()} YER
-                                                </option>
-                                            );
-                                        })}
-                                    </select>
-                                );
-                            })()}
                             <select required className="w-full p-2 border rounded-xl text-sm" value={form.boxId || ''} onChange={e => setForm(prev => ({ ...prev, boxId: e.target.value }))}>
                                 <option value="">-- اختر الصندوق --</option>
                                 {cashBoxes.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
