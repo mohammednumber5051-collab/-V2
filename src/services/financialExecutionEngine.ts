@@ -33,6 +33,19 @@ export class FinancialExecutionEngine {
         if (!operation.operationId) throw new Error("operationId is required");
         if (!operation.user) throw new Error("user is required");
 
+        let relatedTransactionIds: string[] = [];
+        if (operation.type === 'DELETE_QUICK_ENTRY' || operation.type === 'UPDATE_QUICK_ENTRY') {
+            const entryId = operation.payload.entry?.id || operation.payload.newEntry?.id;
+            if (entryId) {
+                try {
+                    const transSnap = await getDocs(query(collection(db, "transactions"), where("sourceId", "==", entryId)));
+                    relatedTransactionIds = transSnap.docs.map(d => d.id);
+                } catch (e) {
+                    console.error("Error pre-fetching related transaction IDs:", e);
+                }
+            }
+        }
+
         return runTransaction(db, async (transaction) => {
             const opRef = doc(db, "operations", operation.operationId);
             const opSnap = await transaction.get(opRef);
@@ -40,13 +53,13 @@ export class FinancialExecutionEngine {
                 throw new Error(`Duplicate operation rejected: ${operation.operationId}`);
             }
 
-            const result = await this.routeOperation(operation, transaction);
+            const result = await this.routeOperation(operation, transaction, relatedTransactionIds);
             transaction.set(opRef, cleanData({ ...operation, status: 'completed', completedAt: new Date().toISOString() }), { merge: true });
             return result;
         });
     }
 
-    private static async routeOperation(operation: FinancialOperation, transaction: any) {
+    private static async routeOperation(operation: FinancialOperation, transaction: any, relatedTransactionIds: string[] = []) {
         const now = operation.timestamp || new Date().toISOString();
         const { type, payload, user } = operation;
 
@@ -298,9 +311,8 @@ export class FinancialExecutionEngine {
             }
 
             // Mark old transactions as deleted
-            const transSnap = await getDocs(query(collection(db, "transactions"), where("sourceId", "==", entryId)));
-            for (const docSnap of transSnap.docs) {
-                transaction.set(doc(db, "transactions", docSnap.id), { recordStatus: 'deleted', updatedAt: now }, { merge: true });
+            for (const transId of relatedTransactionIds) {
+                transaction.set(doc(db, "transactions", transId), { recordStatus: 'deleted', updatedAt: now }, { merge: true });
             }
 
             // Apply negative of the original aggregation impact to adjust stats
@@ -375,9 +387,8 @@ export class FinancialExecutionEngine {
             }
 
             // Mark old transactions as deleted
-            const transSnap = await getDocs(query(collection(db, "transactions"), where("sourceId", "==", entryId)));
-            for (const docSnap of transSnap.docs) {
-                transaction.set(doc(db, "transactions", docSnap.id), { recordStatus: 'deleted', updatedAt: now }, { merge: true });
+            for (const transId of relatedTransactionIds) {
+                transaction.set(doc(db, "transactions", transId), { recordStatus: 'deleted', updatedAt: now }, { merge: true });
             }
 
             // Write new transactions

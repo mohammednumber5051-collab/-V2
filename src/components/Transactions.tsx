@@ -187,6 +187,48 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
             dbService.getAll("cashBoxes")
         ]);
 
+        // Helper functions for deduplication to handle duplicate Firestore/Local Storage records
+        const deduplicateById = <T extends { id?: string }>(arr: T[]): T[] => {
+            const seen = new Set<string>();
+            return arr.filter(item => {
+                if (!item.id) return true;
+                if (seen.has(item.id)) return false;
+                seen.add(item.id);
+                return true;
+            });
+        };
+
+        const deduplicateTransactionShadows = (txsList: any[]): any[] => {
+            const seenShadows = new Set<string>();
+            return txsList.filter(tx => {
+                if (tx.recordStatus === 'deleted') return true;
+                if (tx.sourceId && tx.sourceType) {
+                    const isShadow = [
+                        'sales_invoice',
+                        'purchase_invoice',
+                        'quick_financial_entry',
+                        'manual_receipt',
+                        'manual_payment'
+                    ].includes(tx.sourceType);
+                    
+                    if (isShadow) {
+                        const key = `${tx.sourceId}-${tx.sourceType}`;
+                        if (seenShadows.has(key)) {
+                            console.warn(`Duplicate shadow transaction ignored: ${tx.id} for key ${key}`);
+                            return false;
+                        }
+                        seenShadows.add(key);
+                    }
+                }
+                return true;
+            });
+        };
+
+        const uniqueInvs = deduplicateById(invs as Invoice[]);
+        const uniqueVchs = deduplicateById(vchs as Voucher[]);
+        const uniqueQes = deduplicateById(qes as QuickFinancialEntry[]);
+        const uniqueTxs = deduplicateTransactionShadows(deduplicateById(txs as Transaction[]));
+
         setCashBoxes(boxes as CashBox[]);
 
         const boxMap = new Map((boxes as any[]).map(b => [b.id, b.name]));
@@ -195,7 +237,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
 
         // Calculate subsequent payments per invoice to correct the invoice initial paid amount and avoid double counting
         const subsequentPaymentsMap = new Map<string, number>();
-        (txs as Transaction[]).forEach(tx => {
+        (uniqueTxs as Transaction[]).forEach(tx => {
             if (tx.recordStatus === 'deleted') return;
             if (tx.sourceId && tx.sourceType === 'invoice_payment') {
                 const currentSum = subsequentPaymentsMap.get(tx.sourceId) || 0;
@@ -203,7 +245,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
             }
         });
 
-        (invs as Invoice[]).forEach(inv => {
+        (uniqueInvs as Invoice[]).forEach(inv => {
             if (inv.recordStatus === 'deleted') return;
             
             const subsequentPaid = subsequentPaymentsMap.get(inv.id!) || 0;
@@ -241,7 +283,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
             });
         });
 
-        (vchs as Voucher[]).forEach(vch => {
+        (uniqueVchs as Voucher[]).forEach(vch => {
             if (vch.recordStatus === 'deleted') return;
             const changes: Record<string, number> = {};
             if (vch.boxId && vch.amount) {
@@ -267,7 +309,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
             });
         });
 
-        (qes as QuickFinancialEntry[]).forEach(qe => {
+        (uniqueQes as QuickFinancialEntry[]).forEach(qe => {
             if (qe.recordStatus === 'deleted') return;
             const changes: Record<string, number> = {};
             if (qe.cashBoxId && qe.paidAmount && qe.paidAmount > 0) {
@@ -294,7 +336,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
             });
         });
 
-        (txs as Transaction[]).forEach(tx => {
+        (uniqueTxs as Transaction[]).forEach(tx => {
             if (tx.recordStatus === 'deleted') return;
             
             // Skip transactions that represent the invoice itself or its initial payment, or quick entries, to avoid double-counting
@@ -334,7 +376,7 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
 
         allMovements.sort((a, b) => b.dateObj.getTime() - a.dateObj.getTime());
         setMovements(allMovements);
-        setTransactions(txs as Transaction[]);
+        setTransactions(uniqueTxs as Transaction[]);
 
     } catch(err) {
         console.error("Failed to load transactions", err);

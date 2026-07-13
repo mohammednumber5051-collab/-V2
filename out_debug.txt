@@ -1,0 +1,2 @@
+txSum=22000, invSum=197000, qeSum=0, vchSum=15000
+Total: 234000

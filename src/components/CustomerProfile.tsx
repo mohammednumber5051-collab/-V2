@@ -6,6 +6,42 @@ import { Customer, Supplier, Invoice, Transaction, OpticalCustomerProfileData } 
 import { cn, hasPermission } from "../lib/utils";
 import PrintPreviewModal from "./PrintPreviewModal";
 
+const deduplicateById = <T extends { id?: string }>(arr: T[]): T[] => {
+    const seen = new Set<string>();
+    return arr.filter(item => {
+        if (!item.id) return true;
+        if (seen.has(item.id)) return false;
+        seen.add(item.id);
+        return true;
+    });
+};
+
+const deduplicateTransactionShadows = (txsList: Transaction[]): Transaction[] => {
+    const seenShadows = new Set<string>();
+    return txsList.filter(tx => {
+        if (tx.recordStatus === 'deleted') return true;
+        if (tx.sourceId && tx.sourceType) {
+            const isShadow = [
+                'sales_invoice',
+                'purchase_invoice',
+                'quick_financial_entry',
+                'manual_receipt',
+                'manual_payment'
+            ].includes(tx.sourceType);
+            
+            if (isShadow) {
+                const key = `${tx.sourceId}-${tx.sourceType}`;
+                if (seenShadows.has(key)) {
+                    console.warn(`Duplicate shadow transaction ignored: ${tx.id} for key ${key}`);
+                    return false;
+                }
+                seenShadows.add(key);
+            }
+        }
+        return true;
+    });
+};
+
 interface CustomerProfileProps {
     partnerId: string;
     partnerType: 'customer' | 'supplier';
@@ -62,9 +98,9 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
             }
         }
 
-        const filteredInvoices = allI.filter(i => i.partnerId === partnerId);
-        const filteredTransactions = allT.filter(t => t.partnerId === partnerId);
-        const filteredQEs = allQE.filter(qe => qe.partnerId === partnerId);
+        const filteredInvoices = deduplicateById(allI.filter(i => i.partnerId === partnerId));
+        const filteredTransactions = deduplicateTransactionShadows(deduplicateById(allT.filter(t => t.partnerId === partnerId)));
+        const filteredQEs = deduplicateById(allQE.filter(qe => qe.partnerId === partnerId));
 
         setInvoices(filteredInvoices);
         setTransactions(filteredTransactions);
@@ -80,9 +116,13 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
 
             const activeTrans = filteredTransactions.filter(t => {
                 if (t.recordStatus === 'deleted') return false;
-                if (t.sourceId && (t.sourceType === 'sales_invoice' || t.sourceType === 'purchase_invoice' || t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment')) {
+                if (t.sourceId && (t.sourceType === 'sales_invoice' || t.sourceType === 'purchase_invoice' || t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment' || t.sourceType === 'quick_financial_entry')) {
                     if (t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment') {
                         if (!activeInvIds.has(t.sourceId) && !activeQEIds.has(t.sourceId)) {
+                            return false;
+                        }
+                    } else if (t.sourceType === 'quick_financial_entry') {
+                        if (!activeQEIds.has(t.sourceId)) {
                             return false;
                         }
                     } else {
@@ -159,10 +199,14 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
     const activeTransactions = transactions.filter(t => {
         if (t.recordStatus === 'deleted') return false;
         
-        // Dynamic cleanup: ignore payments/receipts whose referenced invoice has been deleted
-        if (t.sourceId && (t.sourceType === 'sales_invoice' || t.sourceType === 'purchase_invoice' || t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment')) {
+        // Dynamic cleanup: ignore payments/receipts whose referenced invoice/quick entry has been deleted
+        if (t.sourceId && (t.sourceType === 'sales_invoice' || t.sourceType === 'purchase_invoice' || t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment' || t.sourceType === 'quick_financial_entry')) {
             if (t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment') {
                 if (!activeInvoiceIds.has(t.sourceId) && !activeQEIds.has(t.sourceId)) {
+                    return false;
+                }
+            } else if (t.sourceType === 'quick_financial_entry') {
+                if (!activeQEIds.has(t.sourceId)) {
                     return false;
                 }
             } else {
@@ -292,19 +336,39 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
         });
     });
 
+    // Add active quick entries as single consolidated cards
+    activeQEs.forEach(qe => {
+        const netAmount = qe.netAmount || qe.amount || 0;
+        const paid = qe.paidAmount || 0;
+        const remaining = qe.remainingAmount !== undefined ? qe.remainingAmount : (netAmount - paid);
+        
+        let title = '';
+        if (qe.entryType === 'manual_sale') title = 'فاتورة بيع سريع';
+        else if (qe.entryType === 'manual_purchase') title = 'فاتورة مشتريات سريعة';
+        else if (qe.entryType === 'receipt') title = 'سند قبض نقدي (إدخال سريع)';
+        else if (qe.entryType === 'payment') title = 'سند صرف نقدي (إدخال سريع)';
+        else title = 'عملية مالية سريعة';
+
+        visualTimeline.push({
+            id: qe.id,
+            type: 'quick_entry_card',
+            date: qe.createdAt,
+            title: title,
+            description: qe.notes || title,
+            total: qe.amount || netAmount,
+            discount: qe.discount || 0,
+            netAmount: netAmount,
+            paid: paid,
+            remaining: remaining,
+            notes: qe.notes || '',
+        });
+    });
+
     // Add standalone or subsequent transactions
     activeTransactions.forEach(t => {
-        if (t.sourceType === 'sales_invoice' || t.sourceType === 'purchase_invoice') return;
-        
-        // Skip initial payments linked to active invoices since they are already summarized inside the invoice cards
-        const isInitialPayment = (t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment') && 
-            activeInvoices.some(i => i.id === t.sourceId);
-        if (isInitialPayment) return;
+        if (t.sourceType === 'sales_invoice' || t.sourceType === 'purchase_invoice' || t.sourceType === 'quick_financial_entry' || t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment') return;
 
-        let title = t.type === 'قبض' ? 'سند قبض نقدي' : 'سند صرف نقدي';
-        if (t.sourceType === 'quick_financial_entry') {
-            title = t.type === 'قبض' ? 'فاتورة بيع سريع' : 'فاتورة مشتريات سريعة';
-        }
+        const title = t.type === 'قبض' ? 'سند قبض نقدي' : 'سند صرف نقدي';
 
         visualTimeline.push({
             id: t.id,
@@ -322,8 +386,8 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
     // Link each visual timeline item to its accurate ledger running balance at that point in time
     const visualTimelineWithBalance = visualTimeline.map(item => {
         let ledgerMatch;
-        if (item.type === 'invoice') {
-            // If the invoice has an initial payment, its final running balance is the balance after that payment transaction
+        if (item.type === 'invoice' || item.type === 'quick_entry_card') {
+            // If the invoice or quick entry has an initial payment, its final running balance is the balance after that payment transaction
             const paymentMatch = timeline.find(x => 
                 (x.id === item.id || x.sourceId === item.id) && 
                 (x.credit > 0 || x.debit > 0) &&
@@ -492,9 +556,9 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
                             <span>إجمالي المدفوع:</span>
                             <strong>${(totalPayments || 0).toLocaleString()} YER</strong>
                         </div>
-                        <div class="fin-row total" style="color: ${partner.balance > 0 ? '#b91c1c' : '#047857'}">
+                        <div class="fin-row total" style="color: ${calculatedBalance > 0 ? '#b91c1c' : '#047857'}">
                             <span>الرصيد المتبقي:</span>
-                            <strong>${(partner.balance || 0).toLocaleString()} YER</strong>
+                            <strong>${(calculatedBalance || 0).toLocaleString()} YER</strong>
                         </div>
                     </div>
 
@@ -778,9 +842,9 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
                             <div class="card-label">إجمالي الدفعات المقبوضة</div>
                             <div class="card-val" style="color: #2563eb;">${(totalPayments || 0).toLocaleString()} <span style="font-size: 10px;">YER</span></div>
                         </div>
-                        <div class="financial-card ${partner.balance > 0 ? 'balance' : 'balance-zero'}">
-                            <div class="card-label" style="color: ${partner.balance > 0 ? '#b91c1c' : '#047857'}">الرصيد المتبقي المستحق</div>
-                            <div class="card-val" style="color: ${partner.balance > 0 ? '#b91c1c' : '#047857'}">${(partner.balance || 0).toLocaleString()} <span style="font-size: 10px;">YER</span></div>
+                        <div class="financial-card ${calculatedBalance > 0 ? 'balance' : 'balance-zero'}">
+                            <div class="card-label" style="color: ${calculatedBalance > 0 ? '#b91c1c' : '#047857'}">الرصيد المتبقي المستحق</div>
+                            <div class="card-val" style="color: ${calculatedBalance > 0 ? '#b91c1c' : '#047857'}">${(calculatedBalance || 0).toLocaleString()} <span style="font-size: 10px;">YER</span></div>
                         </div>
                     </div>
 
@@ -1009,11 +1073,11 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
                             <div key={idx} className="relative flex items-start gap-3">
                                 <div className={cn(
                                     "w-8 h-8 rounded-full flex items-center justify-center shrink-0 border-4 border-white dark:border-[#0b0f19] relative z-10 shadow-sm transition-colors",
-                                    item.type === 'invoice' 
+                                    (item.type === 'invoice' || item.type === 'quick_entry_card') 
                                         ? "bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400" 
                                         : "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400"
                                 )}>
-                                    {item.type === 'invoice' ? <FileText size={14} /> : <Wallet size={14} />}
+                                    {(item.type === 'invoice' || item.type === 'quick_entry_card') ? <FileText size={14} /> : <Wallet size={14} />}
                                 </div>
                                 <div className="bg-white dark:bg-[#131b2e] border border-slate-100 dark:border-slate-800 shadow-sm rounded-2xl p-4 flex-1 text-xs transition-colors space-y-3">
                                     <div className="flex justify-between items-start mb-1 gap-2">
@@ -1026,7 +1090,7 @@ export default function CustomerProfile({ partnerId, partnerType, onClose }: Cus
                                         </p>
                                     </div>
 
-                                    {item.type === 'invoice' ? (
+                                    {(item.type === 'invoice' || item.type === 'quick_entry_card') ? (
                                         <>
                                             {/* Invoice Financial details */}
                                             <div className="grid grid-cols-2 gap-2 bg-slate-50/70 dark:bg-[#0c1222] p-2.5 rounded-xl border border-slate-100/50 dark:border-slate-800/80 text-[10px]">

@@ -150,12 +150,15 @@ export default function Partners({ type }: PartnersProps) {
     };
 
     const partnerTotalsMap = React.useMemo(() => {
-        const map: Record<string, { total: number, paid: number, remaining: number }> = {};
-        partners.forEach(p => {
-            map[p.id!] = { total: 0, paid: 0, remaining: p.balance || 0 };
-        });
-        return map;
-    }, [partners]);
+        return calculateUnifiedPartnerBalances(
+            partners,
+            allTransactions,
+            invoices,
+            vouchers,
+            quickEntries,
+            type
+        );
+    }, [partners, allTransactions, invoices, vouchers, quickEntries, type]);
 
     const getPartnerTotals = (partnerId: string) => {
         return partnerTotalsMap[partnerId] || { total: 0, paid: 0, remaining: 0 };
@@ -307,7 +310,7 @@ export default function Partners({ type }: PartnersProps) {
                     `;
                 }).join("");
 
-                const balanceVal = p.balance || 0;
+                const balanceVal = getPartnerTotals(p.id!).remaining;
                 let balanceClass = "balance-neutral";
                 let balanceLabel = "مسدد";
                 if (balanceVal > 0) {
@@ -644,7 +647,7 @@ export default function Partners({ type }: PartnersProps) {
         }
 
         // Balance Status filter
-        const balance = p.balance || 0;
+        const balance = getPartnerTotals(p.id!).remaining;
         if (filterBalanceStatus === "settled" && balance !== 0) return false;
         if (filterBalanceStatus === "due" && balance <= 0) return false;
         if (filterBalanceStatus === "credit" && balance >= 0) return false;
@@ -870,9 +873,9 @@ export default function Partners({ type }: PartnersProps) {
                                     </div>
                                     <div className={cn(
                                         "font-mono px-2 py-0.5 rounded-lg",
-                                        p.balance > 0 ? "bg-rose-50 text-rose-600 dark:bg-rose-500/10" : p.balance < 0 ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10" : "bg-slate-50 text-slate-400 dark:bg-slate-800"
+                                        getPartnerTotals(p.id!).remaining > 0 ? "bg-rose-50 text-rose-600 dark:bg-rose-500/10" : getPartnerTotals(p.id!).remaining < 0 ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10" : "bg-slate-50 text-slate-400 dark:bg-slate-800"
                                     )}>
-                                        {Math.abs(p.balance || 0).toLocaleString()}
+                                        {Math.abs(getPartnerTotals(p.id!).remaining || 0).toLocaleString()}
                                     </div>
                                 </div>
                             </div>

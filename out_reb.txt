@@ -1,0 +1,4 @@
+Initializing Firestore with database: ai-studio-remixv2-b53b97d8-0528-4f2f-802c-5c524b9dcf8c
+Firebase initialized for project: assar-optical-erp
+Starting Precise Financial State Rebuild...
+Anonymous authentication succeeded.

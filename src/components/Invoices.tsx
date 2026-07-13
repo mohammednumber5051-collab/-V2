@@ -113,7 +113,7 @@ export default function Invoices({ type, currentUser: propCurrentUser }: Invoice
         setIsSearchingOriginal(true);
         try {
             const targetType = type === 'sale_return' ? 'sale' : 'purchase';
-            const res = await dbService.getPaginated("invoices", 100, null, [{ field: 'type', op: '==', value: targetType }]);
+            const res = await dbService.getPaginated("invoices", 1000, null, [{ field: 'type', op: '==', value: targetType }]);
             const matched = (res.data as Invoice[]).filter(inv => 
                 (inv.invoiceNumber && inv.invoiceNumber.toLowerCase().includes(term.toLowerCase())) ||
                 (inv.id && inv.id.toLowerCase().includes(term.toLowerCase())) ||
@@ -276,7 +276,7 @@ const lensTypeOptions = [
         }
         
         try {
-            const res = await dbService.getPaginated("invoices", 25, reset ? null : lastInvoiceDoc, [{ field: 'type', op: '==', value: type }]);
+            const res = await dbService.getPaginated("invoices", 1000, reset ? null : lastInvoiceDoc, [{ field: 'type', op: '==', value: type }]);
             setInvoices(prev => {
                 const newData = res.data as Invoice[];
                 if (reset) return newData;

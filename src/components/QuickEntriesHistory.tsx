@@ -103,12 +103,13 @@ export default function QuickEntriesHistory({ onNavigate, currentUser }: QuickEn
 
         try {
             const [data, s, boxes] = await Promise.all([
-                dbService.getPaginated("quick_financial_entries", 100, reset ? null : lastDoc, []),
+                dbService.getPaginated("quick_financial_entries", 1000, reset ? null : lastDoc, []),
                 dbService.getStoreSettings(),
                 dbService.getAll("cashBoxes")
             ]);
             
             const processedData = (data.data as QuickFinancialEntry[]).reduce((acc: QuickFinancialEntry[], entry: QuickFinancialEntry) => {
+                if (entry.recordStatus === 'deleted') return acc;
                 if (!entry.referenceNumber) {
                     acc.push(entry);
                     return acc;

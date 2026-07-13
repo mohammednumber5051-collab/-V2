@@ -32,7 +32,7 @@ export function calculateUnifiedCashBalances(
         if (tx.recordStatus === 'deleted') return;
         
         // Skip accrual-only records (non-cash)
-        if (tx.sourceType === 'sales_invoice' || tx.sourceType === 'purchase_invoice' || tx.sourceType === 'quick_financial_entry') {
+        if (tx.sourceType === 'sales_invoice' || tx.sourceType === 'purchase_invoice' || tx.sourceType === 'quick_financial_entry' || tx.sourceType === 'manual_receipt' || tx.sourceType === 'manual_payment') {
             // These are bookkeeping records, not cash movements. 
             // Note: Quick entries create TWO transactions, one 'quick_financial_entry' (accrual) 
             // and one 'manual_receipt/payment' (cash). We skip the accrual one here.
@@ -41,16 +41,12 @@ export function calculateUnifiedCashBalances(
         
         const amount = Number(tx.amount || 0);
         
-        // Track how much cash we've already counted from transactions for each invoice/QE
+        // Track how much cash we've already counted from transactions for each invoice
         if (tx.sourceId) {
-            if (tx.sourceType === 'invoice_payment' || tx.sourceType === 'manual_receipt' || tx.sourceType === 'manual_payment') {
+            if (tx.sourceType === 'invoice_payment') {
                 // If it's linked to an invoice
                 if (invoices.some(inv => inv.id === tx.sourceId)) {
                     invoiceCashFromTransactions[tx.sourceId] = (invoiceCashFromTransactions[tx.sourceId] || 0) + amount;
-                }
-                // If it's linked to a quick entry
-                if (quickEntries.some(qe => qe.id === tx.sourceId)) {
-                    qeCashFromTransactions[tx.sourceId] = (qeCashFromTransactions[tx.sourceId] || 0) + amount;
                 }
             }
         }
@@ -125,7 +121,50 @@ export function calculateUnifiedPartnerBalances(
     const partnerBalances: Record<string, { total: number, paid: number, remaining: number }> = {};
     const isCustomer = type === 'customer';
 
-    partners.forEach(p => {
+    // Helper functions for deduplication to handle duplicate Firestore/Local Storage records
+    const deduplicateById = <T extends { id?: string }>(arr: T[]): T[] => {
+        const seen = new Set<string>();
+        return arr.filter(item => {
+            if (!item.id) return true;
+            if (seen.has(item.id)) return false;
+            seen.add(item.id);
+            return true;
+        });
+    };
+
+    const deduplicateTransactionShadows = (txs: Transaction[]): Transaction[] => {
+        const seenShadows = new Set<string>();
+        return txs.filter(tx => {
+            if (tx.recordStatus === 'deleted') return true;
+            if (tx.sourceId && tx.sourceType) {
+                const isShadow = [
+                    'sales_invoice',
+                    'purchase_invoice',
+                    'quick_financial_entry',
+                    'manual_receipt',
+                    'manual_payment'
+                ].includes(tx.sourceType);
+                
+                if (isShadow) {
+                    const key = `${tx.sourceId}-${tx.sourceType}`;
+                    if (seenShadows.has(key)) {
+                        console.warn(`Duplicate shadow transaction ignored in calculations: ${tx.id} for key ${key}`);
+                        return false;
+                    }
+                    seenShadows.add(key);
+                }
+            }
+            return true;
+        });
+    };
+
+    const uniquePartners = deduplicateById(partners);
+    const uniqueTransactions = deduplicateTransactionShadows(deduplicateById(transactions));
+    const uniqueInvoices = deduplicateById(invoices);
+    const uniqueVouchers = deduplicateById(vouchers);
+    const uniqueQuickEntries = deduplicateById(quickEntries);
+
+    uniquePartners.forEach(p => {
         if (p.id) {
             partnerBalances[p.id] = { total: 0, paid: 0, remaining: 0 };
         }
@@ -133,14 +172,14 @@ export function calculateUnifiedPartnerBalances(
 
     // Identify invoices that have associated transactions to avoid double-counting
     const invoiceIdsWithTransactions = new Set<string>();
-    transactions.forEach(t => {
+    uniqueTransactions.forEach(t => {
         if (t.recordStatus !== 'deleted' && t.sourceId && (t.sourceType === 'sales_invoice' || t.sourceType === 'purchase_invoice')) {
             invoiceIdsWithTransactions.add(t.sourceId);
         }
     });
 
     // 1. Process Invoices
-    invoices.forEach(inv => {
+    uniqueInvoices.forEach(inv => {
         if (inv.recordStatus === 'deleted' || !inv.partnerId) return;
         if (!partnerBalances[inv.partnerId]) return;
 
@@ -160,7 +199,7 @@ export function calculateUnifiedPartnerBalances(
     });
 
     // 2. Process Vouchers
-    vouchers.forEach(vch => {
+    uniqueVouchers.forEach(vch => {
         if (vch.recordStatus === 'deleted' || !vch.partnerId) return;
         if (!partnerBalances[vch.partnerId]) return;
 
@@ -172,12 +211,12 @@ export function calculateUnifiedPartnerBalances(
     });
 
     // 3. Process Transactions
-    transactions.forEach(tx => {
+    uniqueTransactions.forEach(tx => {
         if (tx.recordStatus === 'deleted' || !tx.partnerId) return;
         if (!partnerBalances[tx.partnerId]) return;
 
         // Skip shadow accrual records
-        if (tx.sourceType === 'sales_invoice' || tx.sourceType === 'purchase_invoice') return;
+        if (tx.sourceType === 'sales_invoice' || tx.sourceType === 'purchase_invoice' || tx.sourceType === 'quick_financial_entry') return;
 
         const amount = Number(tx.amount || 0);
         const isReceipt = tx.type === 'قبض';
@@ -200,13 +239,13 @@ export function calculateUnifiedPartnerBalances(
     // 4. Process Quick Entries (Accrual part)
     // QE's also have shadow transactions for cash, so we only handle the 'paid' field if no transactions exist.
     const qeIdsWithTransactions = new Set<string>();
-    transactions.forEach(t => {
+    uniqueTransactions.forEach(t => {
         if (t.recordStatus !== 'deleted' && t.sourceId && (t.sourceType === 'quick_financial_entry' || t.sourceType === 'manual_receipt' || t.sourceType === 'manual_payment')) {
             qeIdsWithTransactions.add(t.sourceId);
         }
     });
 
-    quickEntries.forEach(qe => {
+    uniqueQuickEntries.forEach(qe => {
         if (qe.recordStatus === 'deleted' || !qe.partnerId) return;
         if (!partnerBalances[qe.partnerId]) return;
 

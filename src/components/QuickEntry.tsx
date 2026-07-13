@@ -167,7 +167,7 @@ export default function QuickEntry({ onNavigate, editId, currentUser: propCurren
 
     const loadRecentEntries = async () => {
         try {
-            const entries = await dbService.getAll("quick_financial_entries") as QuickFinancialEntry[];
+            const entries = (await dbService.getAll("quick_financial_entries") as QuickFinancialEntry[]).filter(e => e.recordStatus !== 'deleted');
             // Sort by createdAt desc
             const sorted = entries.sort((a, b) => safeNewDate(b.createdAt).getTime() - safeNewDate(a.createdAt).getTime());
             setRecentEntries(sorted);
@@ -234,7 +234,7 @@ export default function QuickEntry({ onNavigate, editId, currentUser: propCurren
                 await loadRecentEntries();
 
                 if (editId) {
-                    const allEntries = await dbService.getAll("quick_financial_entries") as QuickFinancialEntry[];
+                    const allEntries = (await dbService.getAll("quick_financial_entries") as QuickFinancialEntry[]).filter(e => e.recordStatus !== 'deleted');
                     const toEdit = allEntries.find(e => e.id === editId);
                     if (toEdit) {
                         setOldEntryData(toEdit);

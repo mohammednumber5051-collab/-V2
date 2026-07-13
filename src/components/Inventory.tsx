@@ -78,7 +78,7 @@ export default function Inventory({ currentUser: propCurrentUser }: { currentUse
             // Note: Since Firestore requires advanced indexes for complex dynamic queries (like search + order),
             // a basic implementation uses pagination and we handle simple filters locally if not too big,
             // or we use simple field constraints. For safety on mobile, we load chunks.
-            const res = await dbService.getPaginated("products", 25, reset ? null : lastDoc, []);
+            const res = await dbService.getPaginated("products", 1000, reset ? null : lastDoc, []);
             
             setProducts(prev => {
                 const newData = res.data as Product[];

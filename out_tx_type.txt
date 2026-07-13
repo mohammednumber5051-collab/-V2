@@ -1,0 +1,4 @@
+Tx 9mN9lVacQbHNqYKSac6S - قبض 5000 (source: ziN7UcLCAp7n59Jn4KZF, sourceType: manual_receipt)
+Tx JMIwhLDZhskNEzivlShs - قبض 6000 (source: gzuGjsRnzn8tz4OP6oB9, sourceType: manual_receipt)
+Tx eByZCjp3TFlzgnFSaq57 - قبض 5000 (source: ziN7UcLCAp7n59Jn4KZF, sourceType: manual_receipt)
+Tx qwu0JldQofAjEBSx3EUx - قبض 6000 (source: gzuGjsRnzn8tz4OP6oB9, sourceType: manual_receipt)
