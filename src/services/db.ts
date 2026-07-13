@@ -80,6 +80,13 @@ export const dbService = {
     async getPaginated(collectionName: string, pageSize: number, lastVisible: any, filters: any[] = []) {
         const constraints: QueryConstraint[] = [];
         filters.forEach((f) => constraints.push(where(f.field, f.op, f.value)));
+        // Only apply orderBy + cursor when there are no equality filters, to avoid requiring
+        // composite Firestore indexes. Filtered collections (e.g. invoices by type) should
+        // use getAll() + client-side filter instead of getPaginated.
+        if (filters.length === 0) {
+            constraints.push(orderBy('createdAt', 'desc'));
+            if (lastVisible) constraints.push(startAfter(lastVisible));
+        }
         constraints.push(limit(pageSize + 1));
         const q = query(collection(db, collectionName), ...constraints);
         const snap = await getDocs(q);

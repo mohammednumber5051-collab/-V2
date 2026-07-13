@@ -1013,8 +1013,19 @@ export class FinancialExecutionEngine {
     private static async handleAddVoucher(payload: any, txn: any, user: any, now: string): Promise<string> {
         const { voucher } = payload;
 
-        // CashBox validation
+        // Determine IDs locally before any reads or writes
+        const vRef = voucher.id
+            ? doc(db, "vouchers", voucher.id)
+            : doc(collection(db, "vouchers"));
+        const voucherId = vRef.id;
+        const transRef = doc(collection(db, "transactions"));
+        const transId = transRef.id;
+
         const cashChange = voucher.type === "receipt" ? voucher.amount : -voucher.amount;
+
+        // ── ALL READS FIRST (Firestore transaction rule) ──────────────────────
+
+        // 1. Validate cashBox balance for outgoing payments
         if (cashChange < 0 && voucher.boxId) {
             const boxSnap = await txn.get(doc(db, "cashBoxes", voucher.boxId));
             const bal = boxSnap.exists() ? Number(boxSnap.data()?.balance || 0) : 0;
@@ -1023,27 +1034,74 @@ export class FinancialExecutionEngine {
             }
         }
 
-        const vRef = voucher.id
-            ? doc(db, "vouchers", voucher.id)
-            : doc(collection(db, "vouchers"));
-        const voucherId = vRef.id;
+        // 2. Read linked invoice when a receipt voucher is tied to a specific invoice.
+        //    This updates the invoice's paid amount and status automatically.
+        let linkedInvoice: any = null;
+        let newInvoicePaid = 0;
+        let newInvoiceStatus = '';
+        if (voucher.invoiceId && voucher.type === "receipt") {
+            const invSnap = await txn.get(doc(db, "invoices", voucher.invoiceId));
+            if (invSnap.exists()) {
+                linkedInvoice = { id: voucher.invoiceId, ...invSnap.data() };
+                const invoiceNet = (linkedInvoice.total || 0) - (linkedInvoice.discount || 0);
+                newInvoicePaid = Math.min((linkedInvoice.paid || 0) + voucher.amount, invoiceNet);
+                newInvoiceStatus = newInvoicePaid >= invoiceNet ? 'مدفوع'
+                    : (newInvoicePaid > 0 ? 'جزئي' : 'آجل');
+            }
+        }
 
+        // ── ALL WRITES ────────────────────────────────────────────────────────
+
+        // 1. Voucher document (stores transactionId so DELETE_VOUCHER can remove it)
         txn.set(vRef, cleanData({
             ...voucher,
             id: voucherId,
+            transactionId: transId,
             recordStatus: "active",
             createdAt: voucher.createdAt || now,
             updatedAt: now,
             createdBy: voucher.createdBy || user.name,
         }));
 
-        // CashBox (guard: only write when boxId is present)
+        // 2. Update linked invoice paid/status if voucher is tied to an invoice
+        if (linkedInvoice) {
+            txn.set(doc(db, "invoices", linkedInvoice.id), cleanData({
+                paid: newInvoicePaid,
+                status: newInvoiceStatus,
+                updatedAt: now,
+                updatedBy: user.name,
+            }), { merge: true });
+        }
+
+        // 3. Transaction document — makes voucher visible in partner account statements
+        txn.set(transRef, cleanData({
+            id: transId,
+            type: voucher.type === "receipt" ? "قبض" : "صرف",
+            sourceType: linkedInvoice ? "invoice_payment" : "voucher",
+            sourceId: linkedInvoice ? linkedInvoice.id : voucherId,
+            voucherId,
+            amount: voucher.amount,
+            currency: voucher.currency || "YER",
+            description: voucher.notes || voucher.description
+                || `${voucher.type === "receipt" ? "سند قبض" : "سند صرف"} رقم ${voucher.voucherNumber || ''}`,
+            partnerId: voucher.partnerId,
+            partnerName: voucher.partnerName,
+            boxId: voucher.boxId,
+            debit: voucher.type === "receipt" ? 0 : voucher.amount,
+            credit: voucher.type === "receipt" ? voucher.amount : 0,
+            recordStatus: "active",
+            createdAt: voucher.createdAt || now,
+            updatedAt: now,
+            createdBy: voucher.createdBy || user.name,
+        }));
+
+        // 4. CashBox (guard: only write when boxId is present)
         if (voucher.boxId) {
             txn.set(doc(db, "cashBoxes", voucher.boxId),
                 cleanData({ balance: increment(cashChange), updatedAt: now }), { merge: true });
         }
 
-        // Partner balance
+        // 5. Partner balance
         const partnerChange = this.voucherPartnerBalanceChange(voucher);
         if (voucher.partnerId && partnerChange !== 0) {
             const coll = voucher.partnerType === "customer" ? "customers" : "suppliers";
@@ -1051,7 +1109,7 @@ export class FinancialExecutionEngine {
                 cleanData({ balance: increment(partnerChange), updatedAt: now }), { merge: true });
         }
 
-        // Aggregation
+        // 6. Aggregation
         const agg: AggregationImpact = { cashBalanceChange: cashChange };
         if (voucher.type === "receipt") {
             agg.receiptsTotal = voucher.amount;
@@ -1063,7 +1121,9 @@ export class FinancialExecutionEngine {
         AggregationEngine.applyFinancialImpact(txn, new Date(voucher.createdAt || now), agg);
 
         this.writeAuditLog(txn, "CREATE", "Transaction", voucherId,
-            `إضافة سند ${voucher.type === "receipt" ? "قبض" : "صرف"} بمبلغ ${voucher.amount}`, user, null, voucher);
+            `إضافة سند ${voucher.type === "receipt" ? "قبض" : "صرف"} بمبلغ ${voucher.amount}` +
+            (linkedInvoice ? ` مربوط بفاتورة #${linkedInvoice.invoiceNumber || linkedInvoice.id?.slice(0, 8)}` : ''),
+            user, null, voucher);
 
         return voucherId;
     }
@@ -1136,10 +1196,42 @@ export class FinancialExecutionEngine {
     /** DELETE_VOUCHER */
     private static async handleDeleteVoucher(payload: any, txn: any, user: any, now: string): Promise<string> {
         const { voucher } = payload;
+        const cashChange = voucher.type === "receipt" ? voucher.amount : -voucher.amount;
 
+        // ── ALL READS FIRST (Firestore transaction rule) ──────────────────────
+        // Read linked invoice to reverse its paid/status
+        let linkedInvoice: any = null;
+        let newInvoicePaid = 0;
+        let newInvoiceStatus = '';
+        if (voucher.invoiceId) {
+            const invSnap = await txn.get(doc(db, "invoices", voucher.invoiceId));
+            if (invSnap.exists()) {
+                linkedInvoice = { id: voucher.invoiceId, ...invSnap.data() };
+                const invoiceNet = (linkedInvoice.total || 0) - (linkedInvoice.discount || 0);
+                newInvoicePaid = Math.max(0, (linkedInvoice.paid || 0) - voucher.amount);
+                newInvoiceStatus = newInvoicePaid <= 0 ? 'آجل'
+                    : (newInvoicePaid >= invoiceNet ? 'مدفوع' : 'جزئي');
+            }
+        }
+
+        // ── ALL WRITES ─────────────────────────────────────────────────────────
+        // Delete voucher document
         txn.delete(doc(db, "vouchers", voucher.id));
 
-        const cashChange = voucher.type === "receipt" ? voucher.amount : -voucher.amount;
+        // Delete the transaction document created when this voucher was saved
+        if (voucher.transactionId) {
+            txn.delete(doc(db, "transactions", voucher.transactionId));
+        }
+
+        // Reverse linked invoice paid/status
+        if (linkedInvoice) {
+            txn.set(doc(db, "invoices", linkedInvoice.id), cleanData({
+                paid: newInvoicePaid,
+                status: newInvoiceStatus,
+                updatedAt: now,
+                updatedBy: user.name,
+            }), { merge: true });
+        }
 
         // Reverse cashBox (guard: only write when boxId is present)
         if (voucher.boxId) {

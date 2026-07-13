@@ -400,6 +400,10 @@ export interface Voucher {
     boxId: string;
     boxName: string;
     notes?: string;
+    /** Firestore document ID of the transaction record created alongside this voucher */
+    transactionId?: string;
+    /** When set on a receipt voucher, ADD_VOUCHER will update the linked invoice paid/status */
+    invoiceId?: string;
     createdBy?: string;
     updatedBy?: string;
     createdAt: string;

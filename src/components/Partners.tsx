@@ -154,8 +154,28 @@ export default function Partners({ type }: PartnersProps) {
         partners.forEach(p => {
             map[p.id!] = { total: 0, paid: 0, remaining: p.balance || 0 };
         });
+
+        // Accumulate invoice net amounts as debits per partner
+        const isCustomerType = type === 'customer';
+        invoices.forEach(inv => {
+            if (inv.recordStatus === 'deleted' || !inv.partnerId || !map[inv.partnerId]) return;
+            const netAmount = (inv.total || 0) - (inv.discount || 0);
+            if (isCustomerType) {
+                if (inv.type === 'sale') map[inv.partnerId].total += netAmount;
+                else if (inv.type === 'sale_return') map[inv.partnerId].total -= netAmount;
+            } else {
+                if (inv.type === 'purchase') map[inv.partnerId].total += netAmount;
+                else if (inv.type === 'purchase_return') map[inv.partnerId].total -= netAmount;
+            }
+        });
+
+        // paid = total − remaining  (partner.balance is the FEE-authoritative remaining value)
+        Object.values(map).forEach(t => {
+            t.paid = Math.max(0, t.total - t.remaining);
+        });
+
         return map;
-    }, [partners]);
+    }, [partners, invoices, type]);
 
     const getPartnerTotals = (partnerId: string) => {
         return partnerTotalsMap[partnerId] || { total: 0, paid: 0, remaining: 0 };
