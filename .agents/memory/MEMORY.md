@@ -1,1 +1,2 @@
 - [Phase 2 Financial Refactor](phase2-financial-refactor.md) — FEE is the only engine; all 14 op types unified; no more dual-path accounting.
+- [Phase 3 Bug Fixes](phase3-bug-fixes.md) — 7 confirmed bugs patched; pre-existing vite.config.ts TS error is the only remaining tsc issue.

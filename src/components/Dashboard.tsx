@@ -68,7 +68,7 @@ export default function Dashboard({ onNavigate, currentUser }: { onNavigate?: (p
                 const dashCache = await dbService.getAll("dashboard_cache");
                 const globalCache = dashCache.find(c => c.id === 'global') || {};
                 
-                // Fetch cash boxes directly
+                // Fetch cash boxes directly for live balance
                 const cashBoxes = await dbService.getAll("cashBoxes");
                 
                 const hasViewBalancePermission = hasPermission(currentUser, 'view_cash_balance');
@@ -116,8 +116,19 @@ export default function Dashboard({ onNavigate, currentUser }: { onNavigate?: (p
                 console.error("Failed to load dashboard stats", err);
             }
         };
+
         loadDashStats();
-        return () => { isMounted = false; };
+
+        // Subscribe to live financial updates so the balance card refreshes
+        // automatically after any invoice, payment, voucher, or transfer.
+        const unsubscribe = syncEngine.subscribe('DATA_CHANGED', () => {
+            loadDashStats();
+        });
+
+        return () => {
+            isMounted = false;
+            unsubscribe();
+        };
     }, [currentUser]);
 
     const mainActions = [

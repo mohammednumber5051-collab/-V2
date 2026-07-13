@@ -346,21 +346,48 @@ export class FinancialExecutionEngine {
 
     /**
      * CREATE_INVOICE
-     * Pipeline: create doc → optional auto-create partner → update partner balance →
-     *           update cashBox → update stock → write transaction docs → aggregation → audit
+     * Pipeline: [reads first] validate cashBox → create doc → optional auto-create partner →
+     *           update partner balance → update cashBox → update stock → write transaction docs → aggregation → audit
+     *
+     * All Firestore reads are performed BEFORE any writes (Firestore transaction rule).
+     * Partner and invoice IDs are generated locally so they are available for the pre-read
+     * accounting computation without requiring any write.
      */
     private static async handleCreateInvoice(payload: any, txn: any, user: any, now: string): Promise<string> {
         const { invoice } = payload;
-
-        let partnerId = invoice.partnerId;
         const type = invoice.type || "sale";
 
-        // Auto-create partner if requested
+        // ── Determine all IDs locally (no Firestore writes yet) ─────────────
+        const invRef = invoice.id
+            ? doc(db, "invoices", invoice.id)
+            : doc(collection(db, "invoices"));
+        const invoiceId = invRef.id;
+
+        let partnerId = invoice.partnerId;
+        let newPartnerRef: any = null;
         if (invoice.autoCreatePartner && !partnerId && invoice.partnerName) {
             const partnerColl = type.includes("sale") ? "customers" : "suppliers";
-            const partnerRef = doc(collection(db, partnerColl));
-            partnerId = partnerRef.id;
-            txn.set(partnerRef, cleanData({
+            newPartnerRef = doc(collection(db, partnerColl));
+            partnerId = newPartnerRef.id;   // ID only — write happens below
+        }
+
+        // Compute accounting with finalized IDs (pure calculation, no Firestore)
+        const acct = computeInvoiceAccounting({ ...invoice, id: invoiceId, partnerId }, user);
+
+        // ── ALL READS FIRST (Firestore transaction rule) ─────────────────────
+        if (invoice.boxId && acct.cashBoxChange < 0) {
+            const boxSnap = await txn.get(doc(db, "cashBoxes", invoice.boxId));
+            const bal = boxSnap.exists() ? Number(boxSnap.data()?.balance || 0) : 0;
+            if (bal + acct.cashBoxChange < 0) {
+                throw new Error(`رصيد الصندوق لا يكفي. الرصيد الحالي: ${bal}`);
+            }
+        }
+
+        // ── ALL WRITES ───────────────────────────────────────────────────────
+
+        // Auto-create partner (write deferred until after reads)
+        if (newPartnerRef) {
+            txn.set(newPartnerRef, cleanData({
                 id: partnerId,
                 name: invoice.partnerName,
                 phone: invoice.partnerPhone || "",
@@ -372,12 +399,7 @@ export class FinancialExecutionEngine {
             }));
         }
 
-        // Assign ID and save invoice document
-        const invRef = invoice.id
-            ? doc(db, "invoices", invoice.id)
-            : doc(collection(db, "invoices"));
-        const invoiceId = invRef.id;
-
+        // Save invoice document
         const invoiceData = cleanData({
             ...invoice,
             id: invoiceId,
@@ -388,18 +410,6 @@ export class FinancialExecutionEngine {
             createdBy: user.name,
         });
         txn.set(invRef, invoiceData);
-
-        // Compute accounting (correct discount formula)
-        const acct = computeInvoiceAccounting({ ...invoice, id: invoiceId, partnerId }, user);
-
-        // Validate cashBox has enough balance (for outgoing payments)
-        if (invoice.boxId && acct.cashBoxChange < 0) {
-            const boxSnap = await txn.get(doc(db, "cashBoxes", invoice.boxId));
-            const bal = boxSnap.exists() ? Number(boxSnap.data()?.balance || 0) : 0;
-            if (bal + acct.cashBoxChange < 0) {
-                throw new Error(`رصيد الصندوق لا يكفي. الرصيد الحالي: ${bal}`);
-            }
-        }
 
         // Partner balance
         if (partnerId && acct.partnerBalanceChange !== 0) {
@@ -1027,9 +1037,11 @@ export class FinancialExecutionEngine {
             createdBy: voucher.createdBy || user.name,
         }));
 
-        // CashBox
-        txn.set(doc(db, "cashBoxes", voucher.boxId),
-            cleanData({ balance: increment(cashChange), updatedAt: now }), { merge: true });
+        // CashBox (guard: only write when boxId is present)
+        if (voucher.boxId) {
+            txn.set(doc(db, "cashBoxes", voucher.boxId),
+                cleanData({ balance: increment(cashChange), updatedAt: now }), { merge: true });
+        }
 
         // Partner balance
         const partnerChange = this.voucherPartnerBalanceChange(voucher);
@@ -1061,15 +1073,29 @@ export class FinancialExecutionEngine {
         const { oldVoucher, newVoucher } = payload;
         const voucherId = newVoucher.id || oldVoucher.id;
 
-        txn.set(doc(db, "vouchers", voucherId), cleanData({ ...newVoucher, id: voucherId, updatedAt: now, updatedBy: user.name }), { merge: true });
-
         const oldCash = oldVoucher.type === "receipt" ? oldVoucher.amount : -oldVoucher.amount;
         const newCash = newVoucher.type === "receipt" ? newVoucher.amount : -newVoucher.amount;
 
-        // CashBox changes
+        // Compute net cash-box deltas per box (pure calculation, no Firestore)
         const boxChanges: Record<string, number> = {};
         if (oldVoucher.boxId) boxChanges[oldVoucher.boxId] = (boxChanges[oldVoucher.boxId] || 0) - oldCash;
         if (newVoucher.boxId) boxChanges[newVoucher.boxId] = (boxChanges[newVoucher.boxId] || 0) + newCash;
+
+        // ── ALL READS FIRST (Firestore transaction rule) ───────────────────────
+        // Validate any cash-box whose net balance would decrease
+        for (const [boxId, change] of Object.entries(boxChanges)) {
+            if (change < 0) {
+                const boxSnap = await txn.get(doc(db, "cashBoxes", boxId));
+                const bal = boxSnap.exists() ? Number(boxSnap.data()?.balance || 0) : 0;
+                if (bal + change < 0) {
+                    throw new Error(`رصيد الصندوق لا يكفي. الرصيد الحالي: ${bal}`);
+                }
+            }
+        }
+
+        // ── ALL WRITES ─────────────────────────────────────────────────────────
+        txn.set(doc(db, "vouchers", voucherId), cleanData({ ...newVoucher, id: voucherId, updatedAt: now, updatedBy: user.name }), { merge: true });
+
         for (const [boxId, change] of Object.entries(boxChanges)) {
             if (change !== 0) {
                 txn.set(doc(db, "cashBoxes", boxId), cleanData({ balance: increment(change), updatedAt: now }), { merge: true });
@@ -1115,9 +1141,11 @@ export class FinancialExecutionEngine {
 
         const cashChange = voucher.type === "receipt" ? voucher.amount : -voucher.amount;
 
-        // Reverse cashBox
-        txn.set(doc(db, "cashBoxes", voucher.boxId),
-            cleanData({ balance: increment(-cashChange), updatedAt: now }), { merge: true });
+        // Reverse cashBox (guard: only write when boxId is present)
+        if (voucher.boxId) {
+            txn.set(doc(db, "cashBoxes", voucher.boxId),
+                cleanData({ balance: increment(-cashChange), updatedAt: now }), { merge: true });
+        }
 
         // Reverse partner
         const partnerChange = this.voucherPartnerBalanceChange(voucher);
@@ -1147,13 +1175,31 @@ export class FinancialExecutionEngine {
     private static async handleCreateQuickEntry(payload: any, txn: any, user: any, now: string): Promise<string> {
         const { entry } = payload;
 
+        // ── Determine partner ID locally (no write yet) ───────────────────────
         let finalPartnerId = entry.partnerId;
-
+        let newPartnerRef: any = null;
         if (entry.autoCreatePartner && !finalPartnerId && entry.partnerName) {
             const partnerColl = (entry.entryType === "manual_sale" || entry.entryType === "receipt") ? "customers" : "suppliers";
-            const pRef = doc(collection(db, partnerColl));
-            finalPartnerId = pRef.id;
-            txn.set(pRef, cleanData({
+            newPartnerRef = doc(collection(db, partnerColl));
+            finalPartnerId = newPartnerRef.id;  // ID only — write deferred below
+        }
+
+        // Compute impact with finalized partnerId (pure calculation, no Firestore)
+        const impact = FinancialEngine.getQuickEntryImpact({ ...entry, partnerId: finalPartnerId }, user);
+
+        // ── ALL READS FIRST (Firestore transaction rule) ──────────────────────
+        if (entry.cashBoxId && impact.cashBoxBalanceChange < 0) {
+            const boxSnap = await txn.get(doc(db, "cashBoxes", entry.cashBoxId));
+            const bal = boxSnap.exists() ? Number(boxSnap.data()?.balance || 0) : 0;
+            if (bal + impact.cashBoxBalanceChange < 0) {
+                throw new Error(`رصيد الصندوق لا يكفي. الرصيد الحالي: ${bal}`);
+            }
+        }
+
+        // ── ALL WRITES ────────────────────────────────────────────────────────
+        // Auto-create partner (write deferred until after all reads)
+        if (newPartnerRef) {
+            txn.set(newPartnerRef, cleanData({
                 id: finalPartnerId,
                 name: entry.partnerName,
                 phone: entry.partnerPhone || "",
@@ -1163,17 +1209,6 @@ export class FinancialExecutionEngine {
                 createdAt: now,
                 updatedAt: now,
             }));
-        }
-
-        const impact = FinancialEngine.getQuickEntryImpact({ ...entry, partnerId: finalPartnerId }, user);
-
-        // Validate cashBox
-        if (entry.cashBoxId && impact.cashBoxBalanceChange < 0) {
-            const boxSnap = await txn.get(doc(db, "cashBoxes", entry.cashBoxId));
-            const bal = boxSnap.exists() ? Number(boxSnap.data()?.balance || 0) : 0;
-            if (bal + impact.cashBoxBalanceChange < 0) {
-                throw new Error(`رصيد الصندوق لا يكفي. الرصيد الحالي: ${bal}`);
-            }
         }
 
         const entryRef = doc(collection(db, "quick_financial_entries"));

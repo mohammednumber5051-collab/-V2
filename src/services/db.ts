@@ -281,7 +281,9 @@ export const dbService = {
 
 const NON_MUTATING = new Set([
     "getAll", "getPaginated", "getArchived", "getStoreSettings",
-    "recalculateFinancials", "resetAllFinancialData", "dumpData",
+    // NOTE: recalculateFinancials IS mutating — it rewrites cashBox/partner balances.
+    // It must NOT be here so DATA_CHANGED fires after a full rebuild.
+    "resetAllFinancialData", "dumpData",
     "createFullDatabaseBackup", "restoreFullDatabaseBackup", "logAudit",
 ]);
 
