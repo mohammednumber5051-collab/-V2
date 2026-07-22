@@ -172,7 +172,7 @@ export default function DailyLedger({ currentUser }: { currentUser?: any }) {
                         disabled={!!currentUser?.assignedBoxId && currentUser.role !== 'SUPER_ADMIN' && currentUser.role !== 'ADMIN'}
                     >
                         <option value="">-- اختر الصندوق للقيود النقدية --</option>
-                        {cashBoxes.filter(b => b.isActive).map(b => (
+                        {cashBoxes.filter(b => b.recordStatus !== 'deleted' && b.isActive !== false).map(b => (
                             <option key={b.id} value={b.id}>{b.name}</option>
                         ))}
                     </select>

@@ -1,8 +1,19 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Invoices from "./Invoices";
 
-export default function InvoicesWrapper({ currentUser }: { currentUser?: any }) {
+interface InvoicesWrapperProps {
+  currentUser?: any;
+  targetInvoice?: { id: string; type: 'sale' | 'purchase' | 'sale_return' | 'purchase_return' } | null;
+}
+
+export default function InvoicesWrapper({ currentUser, targetInvoice }: InvoicesWrapperProps) {
   const [activeTab, setActiveTab] = useState<'sale' | 'purchase' | 'sale_return' | 'purchase_return'>('sale');
+
+  useEffect(() => {
+    if (targetInvoice?.type) {
+      setActiveTab(targetInvoice.type);
+    }
+  }, [targetInvoice]);
 
   return (
     <div className="space-y-2">
@@ -49,7 +60,7 @@ export default function InvoicesWrapper({ currentUser }: { currentUser?: any }) 
         </button>
       </div>
       <div className="">
-        <Invoices type={activeTab} currentUser={currentUser} />
+        <Invoices type={activeTab} currentUser={currentUser} targetInvoiceId={targetInvoice?.id} />
       </div>
     </div>
   );

@@ -90,8 +90,36 @@ export default function App() {
 function AppContent() {
   const [activePage, setActivePage] = useState<Page>('dashboard');
   const [editQuickEntryId, setEditQuickEntryId] = useState<string | null>(null);
+  const [targetInvoiceParams, setTargetInvoiceParams] = useState<{ id: string; type: 'sale' | 'purchase' | 'sale_return' | 'purchase_return' } | null>(null);
+  const [targetVoucherId, setTargetVoucherId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isFabMenuOpen, setIsFabMenuOpen] = useState(false);
+
+  const handleNavigate = (page: string, params?: any) => {
+    if (page === 'invoices') {
+      if (params?.invoiceId) {
+        setTargetInvoiceParams({
+          id: params.invoiceId,
+          type: params.invoiceType || 'sale'
+        });
+      } else {
+        setTargetInvoiceParams(null);
+      }
+    } else if (page === 'vouchers') {
+      if (params?.voucherId) {
+        setTargetVoucherId(params.voucherId);
+      } else {
+        setTargetVoucherId(null);
+      }
+    } else if (page === 'quick_entry') {
+      if (params?.editId) {
+        setEditQuickEntryId(params.editId);
+      } else {
+        setEditQuickEntryId(null);
+      }
+    }
+    setActivePage(page as Page);
+  };
   
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
@@ -311,30 +339,16 @@ function AppContent() {
     }
 
     switch (activePage) {
-      case 'dashboard': return <Dashboard onNavigate={(page: any) => setActivePage(page)} currentUser={currentUser} />;
-      case 'invoices': return <InvoicesWrapper currentUser={currentUser} />;
+      case 'dashboard': return <Dashboard onNavigate={handleNavigate} currentUser={currentUser} />;
+      case 'invoices': return <InvoicesWrapper currentUser={currentUser} targetInvoice={targetInvoiceParams} />;
       case 'inventory': return <Inventory currentUser={currentUser} />;
-      case 'transactions': return <Transactions currentUser={currentUser} onNavigate={(p: any) => setActivePage(p as any)} />;
-      case 'vouchers': return <Vouchers currentUser={currentUser} />;
+      case 'transactions': return <Transactions currentUser={currentUser} onNavigate={handleNavigate} />;
+      case 'vouchers': return <Vouchers currentUser={currentUser} targetVoucherId={targetVoucherId || undefined} />;
       case 'reports': return <Reports />;
       case 'partners': return <PartnersWrapper />;
       case 'users': return <Users currentUser={currentUser} />;
-      case 'quick_entry': return <QuickEntry currentUser={currentUser} onNavigate={(p: any, params?: any) => {
-        if (p === 'quick_entry' && params?.editId) {
-          setEditQuickEntryId(params.editId);
-        } else if (p === 'quick_entry') {
-          setEditQuickEntryId(null);
-        }
-        setActivePage(p);
-      }} editId={editQuickEntryId} />;
-      case 'quick_entries_history': return <QuickEntriesHistory currentUser={currentUser} onNavigate={(p: any, params?: any) => {
-        if (p === 'quick_entry' && params?.editId) {
-          setEditQuickEntryId(params.editId);
-        } else if (p === 'quick_entry') {
-          setEditQuickEntryId(null);
-        }
-        setActivePage(p);
-      }} />;
+      case 'quick_entry': return <QuickEntry currentUser={currentUser} onNavigate={handleNavigate} editId={editQuickEntryId} />;
+      case 'quick_entries_history': return <QuickEntriesHistory currentUser={currentUser} onNavigate={handleNavigate} />;
       case 'daily_ledger': return <DailyLedger currentUser={currentUser} />;
       case 'optical_hub': return <OpticalHub />;
       case 'settings': return <EnterpriseSettings />;

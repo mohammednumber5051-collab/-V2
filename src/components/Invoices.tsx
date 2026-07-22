@@ -24,12 +24,13 @@ const PAYMENT_TYPES: { value: PaymentType; label: string; en: string }[] = [
 interface InvoicesProps {
     type: 'sale' | 'purchase' | 'sale_return' | 'purchase_return';
     currentUser?: any;
+    targetInvoiceId?: string;
 }
 
 type PrintTemplate = 'A4' | 'A3' | 'Thermal80' | 'Thermal58';
 type PrintLanguage = 'AR' | 'EN' | 'BILINGUAL';
 
-export default function Invoices({ type, currentUser: propCurrentUser }: InvoicesProps) {
+export default function Invoices({ type, currentUser: propCurrentUser, targetInvoiceId }: InvoicesProps) {
     const [currentUser, setCurrentUser] = useState<any>(propCurrentUser || null);
 
     useEffect(() => {
@@ -181,7 +182,16 @@ const lensTypeOptions = [
     const [printLanguage, setPrintLanguage] = useState<PrintLanguage>('BILINGUAL');
     const [showTerms, setShowTerms] = useState(true);
     const [showLogo, setShowLogo] = useState(true);
+    const [mobilePreviewTab, setMobilePreviewTab] = useState<'preview' | 'settings'>('preview');
+    const [zoomScale, setZoomScale] = useState<number | 'auto'>('auto');
+    const [windowWidth, setWindowWidth] = useState<number>(typeof window !== 'undefined' ? window.innerWidth : 1024);
     const printRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const handleResize = () => setWindowWidth(window.innerWidth);
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
 
     useEffect(() => {
         const loadSettings = async () => {
@@ -230,6 +240,32 @@ const lensTypeOptions = [
         });
         return unsubscribe;
     }, [type, isModalOpen]);
+
+    useEffect(() => {
+        if (!targetInvoiceId) return;
+
+        let isMounted = true;
+        const findAndSetInvoice = async () => {
+            const found = invoices.find(i => i.id === targetInvoiceId);
+            if (found) {
+                setViewingInvoice(found);
+                return;
+            }
+
+            try {
+                const inv = await dbService.getById("invoices", targetInvoiceId);
+                if (isMounted && inv && inv.recordStatus !== 'deleted') {
+                    setViewingInvoice(inv as Invoice);
+                }
+            } catch (err) {
+                console.error("Failed to load target invoice by id:", targetInvoiceId, err);
+            }
+        };
+
+        findAndSetInvoice();
+
+        return () => { isMounted = false; };
+    }, [targetInvoiceId, type, invoices]);
 
     const loadStaticData = async () => {
         const [prodData, partData, boxData, txs, invs, vchs, qes] = await Promise.all([
@@ -2016,158 +2052,292 @@ const lensTypeOptions = [
 
             {/* UPGRADED PROFESSIONAL PRINTING OR CORRESPONDING CUSTOM PDF EXPORT AREA */}
             <AnimatePresence>
-                {viewingInvoice && (
-                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 md:p-4">
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            className="absolute inset-0 bg-slate-900/60 backdrop-blur-md animate-fade-in"
-                            onClick={() => setViewingInvoice(null)}
-                        />
-                        <motion.div
-                            initial={{ opacity: 0, scale: 0.95 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.95 }}
-                            drag
-                            dragListener={false}
-                            dragControls={printDragControls}
-                            dragMomentum={false}
-                            className="bg-[#111827] w-full max-w-5xl h-[100dvh] md:h-[90dvh] md:rounded-3xl shadow-2xl relative flex flex-col md:flex-row overflow-hidden"
-                        >
-                            
-                            {/* Controller parameters Left Rail */}
-                            <div className="w-full md:w-80 shrink-0 max-h-[50dvh] md:max-h-full min-h-0 bg-white dark:bg-[#131b2e] border-b md:border-b-0 md:border-l border-slate-100 dark:border-slate-850 p-4 md:p-5 flex flex-col overflow-y-auto">
-                                <div className="space-y-4 md:space-y-6 flex-1 min-h-0">
-                                    <div 
-                                        className="flex items-center justify-between cursor-move pb-2"
-                                        onPointerDown={(e) => printDragControls.start(e)}
-                                    >
-                                        <div>
-                                            <h4 className="text-sm font-black text-slate-900 dark:text-white">تنسيق المستند المطبوع</h4>
-                                            <p className="text-[10px] text-slate-450 dark:text-slate-500 font-bold">بوابة المستندات والطباعة الفورية</p>
+                {viewingInvoice && (() => {
+                    const scaleFactor = printTemplate.startsWith('Thermal') ? 1 : (zoomScale !== 'auto' ? zoomScale : (windowWidth < 400 ? 0.42 : windowWidth < 480 ? 0.48 : windowWidth < 640 ? 0.58 : windowWidth < 768 ? 0.70 : windowWidth < 1024 ? 0.85 : 1));
+                    const docWidthPx = printTemplate === 'A3' ? 1123 : 794;
+                    const docHeightPx = printTemplate === 'A3' ? 1587 : 1123;
+                    const netTotal = (viewingInvoice.total || 0) - (viewingInvoice.discount || 0);
+
+                    return (
+                        <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 md:p-4">
+                            <motion.div
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                exit={{ opacity: 0 }}
+                                className="absolute inset-0 bg-slate-950/80 backdrop-blur-md animate-fade-in"
+                                onClick={() => setViewingInvoice(null)}
+                            />
+                            <motion.div
+                                initial={{ opacity: 0, scale: 0.96 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.96 }}
+                                drag
+                                dragListener={false}
+                                dragControls={printDragControls}
+                                dragMomentum={false}
+                                className="bg-slate-900 w-full max-w-6xl h-[100dvh] md:h-[92dvh] md:rounded-3xl shadow-2xl relative flex flex-col overflow-hidden border border-slate-800/80 z-10"
+                            >
+                                {/* Top Header Bar */}
+                                <div className="bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between shrink-0 z-20">
+                                    <div className="flex items-center gap-3">
+                                        <div 
+                                            className="w-9 h-9 rounded-xl bg-blue-600/20 text-blue-400 border border-blue-500/30 flex items-center justify-center font-bold cursor-move shrink-0"
+                                            onPointerDown={(e) => printDragControls.start(e)}
+                                            title="اسحب النافذة"
+                                        >
+                                            <Printer size={18} />
                                         </div>
-                                        <button onClick={() => setViewingInvoice(null)} className="md:hidden p-2 -mr-2 text-slate-400 bg-slate-100 rounded-lg cursor-pointer">
-                                            <X size={20} />
+                                        <div>
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <h3 className="text-sm font-black text-white">معاينة الفاتورة</h3>
+                                                <span className="text-xs font-mono font-black text-blue-400 bg-blue-950/80 px-2 py-0.5 rounded-md border border-blue-800/60 dir-ltr">
+                                                    #{viewingInvoice.invoiceNumber || viewingInvoice.id?.toUpperCase().slice(0, 8)}
+                                                </span>
+                                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 font-mono">
+                                                    {netTotal.toLocaleString()} {viewingInvoice.currency || 'YER'}
+                                                </span>
+                                            </div>
+                                            <p className="text-[10px] text-slate-400 font-bold truncate max-w-[200px] sm:max-w-md">
+                                                {viewingInvoice.partnerName || 'عميل نقدي'} • {new Date(viewingInvoice.createdAt || new Date()).toLocaleDateString('ar-EG')}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {/* Mobile Tab Switcher */}
+                                    <div className="flex md:hidden bg-slate-800/80 p-1 rounded-xl border border-slate-700/50">
+                                        <button
+                                            onClick={() => setMobilePreviewTab('preview')}
+                                            className={cn(
+                                                "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5",
+                                                mobilePreviewTab === 'preview' ? "bg-blue-600 text-white shadow-md" : "text-slate-400 hover:text-white"
+                                            )}
+                                        >
+                                            <Eye size={14} />
+                                            <span>المعاينة</span>
+                                        </button>
+                                        <button
+                                            onClick={() => setMobilePreviewTab('settings')}
+                                            className={cn(
+                                                "px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5",
+                                                mobilePreviewTab === 'settings' ? "bg-blue-600 text-white shadow-md" : "text-slate-400 hover:text-white"
+                                            )}
+                                        >
+                                            <Sparkles size={14} />
+                                            <span>التنسيق</span>
                                         </button>
                                     </div>
 
-                                    {/* Template selection form */}
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block font-mono">قالب الورقة / Form Sizing</label>
-                                        <div className="grid grid-cols-2 gap-1.5">
-                                            {(['A4', 'A3', 'Thermal80', 'Thermal58'] as const).map(style => (
-                                                <button
-                                                    key={style}
-                                                    type="button"
-                                                    onClick={() => setPrintTemplate(style)}
-                                                    className={cn(
-                                                        "py-2 px-1 rounded-xl text-[10px] font-black tracking-wide border transition-all cursor-pointer",
-                                                        printTemplate === style
-                                                            ? "bg-blue-600 text-white border-blue-600 shadow-sm"
-                                                            : "bg-slate-50 dark:bg-slate-900 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-755"
-                                                    )}
-                                                >
-                                                    {style === 'A4' ? 'نموذج A4' : style === 'A3' ? 'نموذج A3' : style === 'Thermal80' ? 'حراري 80مم' : 'حراري 58مم'}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    {/* Languages bilingual selections */}
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block font-mono">اللغة / Bilingual Configuration</label>
-                                        <div className="grid grid-cols-3 gap-1">
-                                            {(['AR', 'EN', 'BILINGUAL'] as const).map(lang => (
-                                                <button
-                                                    key={lang}
-                                                    type="button"
-                                                    onClick={() => setPrintLanguage(lang)}
-                                                    className={cn(
-                                                        "py-2 px-1 rounded-xl text-[9px] font-black border transition-all cursor-pointer",
-                                                        printLanguage === lang
-                                                            ? "bg-blue-600 text-white border-blue-600 shadow-sm"
-                                                            : "bg-slate-50 dark:bg-slate-900 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-755"
-                                                    )}
-                                                >
-                                                    {lang === 'AR' ? 'العربية' : lang === 'EN' ? 'English' : 'ثنائي / Both'}
-                                                </button>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    {/* Display checkboxes */}
-                                    <div className="space-y-2 pt-2 border-t border-slate-50 dark:border-slate-800">
-                                        <label className="text-[10px] font-black text-slate-450 dark:text-slate-400 uppercase tracking-widest block">خيارات إضافية</label>
-                                        <div className="space-y-2">
-                                            <label className="flex items-center gap-2 cursor-pointer text-xs font-bold dark:text-white select-none">
-                                                <input 
-                                                    type="checkbox" 
-                                                    checked={showTerms}
-                                                    onChange={(e) => setShowTerms(e.target.checked)}
-                                                    className="rounded border-slate-300 dark:border-slate-700 text-blue-600 focus:ring-blue-550"
-                                                />
-                                                إدراج شروط الضمان والمحل
-                                            </label>
-                                            <label className="flex items-center gap-2 cursor-pointer text-xs font-bold dark:text-white select-none">
-                                                <input 
-                                                    type="checkbox" 
-                                                    checked={showLogo}
-                                                    onChange={(e) => setShowLogo(e.target.checked)}
-                                                    className="rounded border-slate-300 dark:border-slate-700 text-blue-600 focus:ring-blue-550"
-                                                />
-                                                إظهار الشعار ومعلومات المحل
-                                            </label>
-                                        </div>
-                                    </div>
-                                    
-                                    {/* Information alert about PDF Export */}
-                                    <div className="p-3 bg-blue-50 dark:bg-blue-900/10 rounded-2xl border border-blue-100 dark:border-blue-900/30 flex gap-2.5 items-start">
-                                        <Info size={15} className="text-blue-650 shrink-0 mt-0.5" />
-                                        <div className="text-[10px] leading-relaxed text-blue-800 dark:text-blue-350 font-bold">
-                                            يرجى اختيار <span className="font-extrabold text-blue-600 dark:text-blue-400">"حفظ بتنسيق PDF" (Save to PDF)</span> كطابعة مستهدفة لتنزيل الفاتورة رقمياً بجودة عالية بدون فقدان تماسك الخط العربي.
-                                        </div>
+                                    {/* Action Buttons (Desktop & Close) */}
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            onClick={triggerBrowserPrint}
+                                            className="hidden sm:flex px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white rounded-xl text-xs font-bold items-center gap-1.5 transition-all shadow-lg shadow-blue-600/20 cursor-pointer"
+                                        >
+                                            <Printer size={15} />
+                                            <span>طباعة</span>
+                                        </button>
+                                        <button
+                                            onClick={handlePdfExport}
+                                            className="hidden sm:flex px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white rounded-xl text-xs font-bold items-center gap-1.5 transition-all shadow-lg shadow-emerald-600/20 cursor-pointer"
+                                        >
+                                            <Share2 size={15} />
+                                            <span>تصدير PDF</span>
+                                        </button>
+                                        <button
+                                            onClick={() => setViewingInvoice(null)}
+                                            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all cursor-pointer"
+                                            title="إغلاق"
+                                        >
+                                            <X size={20} />
+                                        </button>
                                     </div>
                                 </div>
 
-                                <div className="space-y-2 pt-4 border-t border-slate-100 dark:border-slate-800">
-                                    <button
-                                        onClick={triggerBrowserPrint}
-                                        className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs rounded-xl shadow-lg shadow-blue-500/10 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer border-none"
-                                    >
-                                        <Printer size={16} /> طباعة الفاتورة الفورية
-                                    </button>
+                                {/* Main Modal Body */}
+                                <div className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden relative">
                                     
-                                    <button
-                                        onClick={handlePdfExport}
-                                        className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-lg shadow-emerald-500/10 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer border-none"
-                                    >
-                                        <Share2 size={15} /> تصدير كمستند PDF ذكي
-                                    </button>
+                                    {/* Left Controller Panel */}
+                                    <div className={cn(
+                                        "w-full md:w-80 shrink-0 bg-slate-900 border-b md:border-b-0 md:border-l border-slate-800 p-4 md:p-5 flex-col overflow-y-auto custom-scrollbar justify-between",
+                                        mobilePreviewTab === 'preview' ? "hidden md:flex" : "flex flex-1"
+                                    )}>
+                                        <div className="space-y-5">
+                                            <div>
+                                                <h4 className="text-xs font-black text-white uppercase tracking-wider mb-1">تنسيق ورقة الطباعة</h4>
+                                                <p className="text-[10px] text-slate-400 font-bold">اختر القياس المناسب لطابعتك</p>
+                                            </div>
 
-                                    <button
-                                        onClick={() => setViewingInvoice(null)}
-                                        className="w-full py-3 bg-slate-100 dark:bg-slate-900 text-slate-500 dark:text-slate-400 text-xs font-bold rounded-xl text-center active:scale-95 transition-all cursor-pointer border-none"
-                                    >
-                                        إغلاق والعودة
-                                    </button>
-                                </div>
-                            </div>
+                                            {/* Template selection */}
+                                            <div className="space-y-2">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">قالب الورقة / Form Sizing</label>
+                                                <div className="grid grid-cols-2 gap-1.5">
+                                                    {(['A4', 'A3', 'Thermal80', 'Thermal58'] as const).map(style => (
+                                                        <button
+                                                            key={style}
+                                                            type="button"
+                                                            onClick={() => setPrintTemplate(style)}
+                                                            className={cn(
+                                                                "py-2 px-2 rounded-xl text-[11px] font-black border transition-all cursor-pointer text-center",
+                                                                printTemplate === style
+                                                                    ? "bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-600/20"
+                                                                    : "bg-slate-800 text-slate-300 border-slate-700/80 hover:bg-slate-750"
+                                                            )}
+                                                        >
+                                                            {style === 'A4' ? 'نموذج A4' : style === 'A3' ? 'نموذج A3' : style === 'Thermal80' ? 'حراري 80مم' : 'حراري 58مم'}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
 
-                            {/* Live Interactive Sizing Grid Canvas */}
-                            <div className="flex-1 bg-slate-900/40 custom-scrollbar flex flex-col items-center w-full min-h-0">
-                                <div className="w-full h-full p-4 md:p-8 overflow-y-auto overflow-x-auto flex" style={{ height: '100%', overflowY: 'auto' }}>
-                                    <div className="m-auto">
-                                        <div 
-                                            ref={printRef}
-                                            id="invoice_wrapper"
-                                            className={cn(
-                                            "bg-white text-slate-900 shadow-xl transition-all relative overflow-hidden",
-                                            printTemplate === 'Thermal80' ? "w-[80mm] min-h-[140mm] text-[10px] p-3 leading-tight rounded-none border border-black/10" : 
-                                            printTemplate === 'Thermal58' ? "w-[58mm] min-h-[100mm] text-[8px] p-2 leading-[1.25] rounded-none border border-black/10" : 
-                                            printTemplate === 'A3' ? "w-[297mm] min-h-[420mm] text-sm p-14 rounded-2xl" : 
-                                            "w-[210mm] min-h-[297mm] text-xs p-8 rounded-2xl" // default A4
-                                        )}
+                                            {/* Languages selections */}
+                                            <div className="space-y-2">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">اللغة / Language</label>
+                                                <div className="grid grid-cols-3 gap-1.5">
+                                                    {(['AR', 'EN', 'BILINGUAL'] as const).map(lang => (
+                                                        <button
+                                                            key={lang}
+                                                            type="button"
+                                                            onClick={() => setPrintLanguage(lang)}
+                                                            className={cn(
+                                                                "py-2 px-1 rounded-xl text-[10px] font-black border transition-all cursor-pointer text-center",
+                                                                printLanguage === lang
+                                                                    ? "bg-blue-600 text-white border-blue-500 shadow-md shadow-blue-600/20"
+                                                                    : "bg-slate-800 text-slate-300 border-slate-700/80 hover:bg-slate-750"
+                                                            )}
+                                                        >
+                                                            {lang === 'AR' ? 'العربية' : lang === 'EN' ? 'English' : 'ثنائي'}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            {/* Display checkboxes */}
+                                            <div className="space-y-2.5 pt-3 border-t border-slate-800">
+                                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">خيارات إضافية</label>
+                                                <div className="space-y-2 bg-slate-800/50 p-3 rounded-2xl border border-slate-750">
+                                                    <label className="flex items-center gap-2.5 cursor-pointer text-xs font-bold text-slate-200 select-none">
+                                                        <input 
+                                                            type="checkbox" 
+                                                            checked={showTerms}
+                                                            onChange={(e) => setShowTerms(e.target.checked)}
+                                                            className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500"
+                                                        />
+                                                        إدراج شروط الضمان والمحل
+                                                    </label>
+                                                    <label className="flex items-center gap-2.5 cursor-pointer text-xs font-bold text-slate-200 select-none">
+                                                        <input 
+                                                            type="checkbox" 
+                                                            checked={showLogo}
+                                                            onChange={(e) => setShowLogo(e.target.checked)}
+                                                            className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500"
+                                                        />
+                                                        إظهار الشعار ومعلومات المحل
+                                                    </label>
+                                                </div>
+                                            </div>
+                                            
+                                            {/* Info alert */}
+                                            <div className="p-3 bg-blue-950/40 rounded-2xl border border-blue-800/40 flex gap-2.5 items-start">
+                                                <Info size={16} className="text-blue-400 shrink-0 mt-0.5" />
+                                                <p className="text-[10px] leading-relaxed text-blue-300 font-bold">
+                                                    اختر <span className="font-black text-blue-200">"حفظ بتنسيق PDF"</span> من قائمة الطابعات للحصول على ملف رقمي ممتاز عالي الجودة.
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-2 pt-4 border-t border-slate-800 mt-4">
+                                            <button
+                                                onClick={() => {
+                                                    setMobilePreviewTab('preview');
+                                                    triggerBrowserPrint();
+                                                }}
+                                                className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-black text-xs rounded-xl shadow-lg shadow-blue-600/20 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer border-none"
+                                            >
+                                                <Printer size={16} /> طباعة الفاتورة الفورية
+                                            </button>
+                                            
+                                            <button
+                                                onClick={handlePdfExport}
+                                                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl shadow-lg shadow-emerald-600/20 active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer border-none"
+                                            >
+                                                <Share2 size={15} /> تصدير كمستند PDF
+                                            </button>
+
+                                            <button
+                                                onClick={() => setViewingInvoice(null)}
+                                                className="w-full py-2.5 bg-slate-800 text-slate-400 hover:text-white text-xs font-bold rounded-xl text-center active:scale-95 transition-all cursor-pointer border-none"
+                                            >
+                                                إغلاق
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Right Canvas Interactive Viewport */}
+                                    <div className={cn(
+                                        "flex-1 bg-slate-950 flex flex-col min-h-0 relative overflow-hidden",
+                                        mobilePreviewTab === 'settings' ? "hidden md:flex" : "flex"
+                                    )}>
+                                        {/* Zoom Controls Bar */}
+                                        <div className="bg-slate-900/90 backdrop-blur border-b border-slate-800 px-3 py-2 flex items-center justify-between shrink-0 z-10 text-xs text-slate-300">
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider ml-1">التكبير:</span>
+                                                <button 
+                                                    onClick={() => setZoomScale('auto')}
+                                                    className={cn("px-2.5 py-1 rounded-lg text-[10px] font-black border transition-all cursor-pointer", zoomScale === 'auto' ? "bg-blue-600 text-white border-blue-500 shadow-sm" : "bg-slate-800 text-slate-300 border-slate-700/80 hover:bg-slate-700")}
+                                                >
+                                                    تلقائي ({Math.round(scaleFactor * 100)}%)
+                                                </button>
+                                                <button 
+                                                    onClick={() => setZoomScale(0.5)}
+                                                    className={cn("px-2 py-1 rounded-lg text-[10px] font-mono font-bold border transition-all cursor-pointer", zoomScale === 0.5 ? "bg-blue-600 text-white border-blue-500" : "bg-slate-800 text-slate-300 border-slate-700/80 hover:bg-slate-700")}
+                                                >
+                                                    50%
+                                                </button>
+                                                <button 
+                                                    onClick={() => setZoomScale(0.75)}
+                                                    className={cn("px-2 py-1 rounded-lg text-[10px] font-mono font-bold border transition-all cursor-pointer", zoomScale === 0.75 ? "bg-blue-600 text-white border-blue-500" : "bg-slate-800 text-slate-300 border-slate-700/80 hover:bg-slate-700")}
+                                                >
+                                                    75%
+                                                </button>
+                                                <button 
+                                                    onClick={() => setZoomScale(1)}
+                                                    className={cn("px-2 py-1 rounded-lg text-[10px] font-mono font-bold border transition-all cursor-pointer", zoomScale === 1 ? "bg-blue-600 text-white border-blue-500" : "bg-slate-800 text-slate-300 border-slate-700/80 hover:bg-slate-700")}
+                                                >
+                                                    100%
+                                                </button>
+                                            </div>
+                                            
+                                            <div className="text-[10px] font-bold text-slate-400 bg-slate-800/80 px-2.5 py-1 rounded-lg border border-slate-700/60 hidden sm:block">
+                                                {printTemplate === 'Thermal80' ? 'حراري 80مم' : printTemplate === 'Thermal58' ? 'حراري 58مم' : printTemplate} • {printLanguage === 'AR' ? 'العربية' : printLanguage === 'EN' ? 'English' : 'ثنائي'}
+                                            </div>
+                                        </div>
+
+                                        {/* Canvas Workspace scroll container */}
+                                        <div className="flex-1 overflow-auto p-2 sm:p-6 flex custom-scrollbar bg-slate-950/80">
+                                            <div 
+                                                className="m-auto flex flex-col items-center justify-start transition-all"
+                                                style={{ 
+                                                    width: printTemplate.startsWith('Thermal') ? 'auto' : (scaleFactor < 1 ? `${docWidthPx * scaleFactor}px` : 'auto')
+                                                }}
+                                            >
+                                                <div 
+                                                    style={{
+                                                        transform: printTemplate.startsWith('Thermal') ? 'none' : `scale(${scaleFactor})`,
+                                                        transformOrigin: 'top center',
+                                                        marginBottom: printTemplate.startsWith('Thermal') ? '0' : (scaleFactor < 1 ? `-${docHeightPx * (1 - scaleFactor)}px` : '0')
+                                                    }}
+                                                    className="transition-transform duration-200 shadow-2xl rounded-2xl overflow-hidden bg-white"
+                                                >
+                                                    <div 
+                                                        ref={printRef}
+                                                        id="invoice_wrapper"
+                                                        className={cn(
+                                                            "bg-white text-slate-900 shadow-xl transition-all relative overflow-hidden",
+                                                            printTemplate === 'Thermal80' ? "w-[80mm] min-h-[140mm] text-[10px] p-3 leading-tight rounded-none border border-black/10" : 
+                                                            printTemplate === 'Thermal58' ? "w-[58mm] min-h-[100mm] text-[8px] p-2 leading-[1.25] rounded-none border border-black/10" : 
+                                                            printTemplate === 'A3' ? "w-[297mm] min-h-[420mm] text-sm p-14 rounded-2xl" : 
+                                                            "w-[210mm] min-h-[297mm] text-xs p-8 rounded-2xl" // default A4
+                                                        )}
                                         dir={printLanguage === 'EN' ? 'ltr' : 'rtl'}
                                         style={{
                                             fontSize: printTemplate === 'Thermal80' ? '11px' : printTemplate === 'Thermal58' ? '9px' : undefined
@@ -2611,14 +2781,32 @@ const lensTypeOptions = [
                                                 </div>
                                             </div>
                                         )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
 
+                                        {/* Mobile Bottom Quick Actions Bar */}
+                                        <div className="md:hidden bg-slate-900 border-t border-slate-800 p-3 flex items-center gap-2 shrink-0 z-20">
+                                            <button
+                                                onClick={triggerBrowserPrint}
+                                                className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs font-black rounded-xl shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2 cursor-pointer border-none"
+                                            >
+                                                <Printer size={16} /> طباعة
+                                            </button>
+                                            <button
+                                                onClick={handlePdfExport}
+                                                className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-black rounded-xl shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 cursor-pointer border-none"
+                                            >
+                                                <Share2 size={16} /> تصدير PDF
+                                            </button>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                        </motion.div>
-                    </div>
-                )}
+                            </motion.div>
+                        </div>
+                    );
+                })()}
             </AnimatePresence>
 
             {/* Modal payment record widget */}

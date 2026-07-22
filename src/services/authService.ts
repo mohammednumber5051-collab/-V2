@@ -100,28 +100,34 @@ export const authService = {
         // }
         //
         //
-        // try {
-        //     const cashBoxes = await dbService.getAll("cashBoxes");
-        //     const hasMainBox = cashBoxes.some((b: any) => b.id === "main-box" || b.name === "الصندوق الرئيسي");
-        //     if (!hasMainBox) {
-        //         console.log("[AuthService] Seeding default cash box الصندوق الرئيسي...");
-        //         const mainBox = {
-        //             id: "main-box",
-        //             name: "الصندوق الرئيسي",
-        //             balance: 0,
-        //             initialBalance: 0,
-        //             currency: "YER",
-        //             recordStatus: 'active',
-        //             isActive: true,
-        //             createdAt: new Date().toISOString(),
-        //             updatedAt: new Date().toISOString()
-        //         };
-        //         await dbService.add("cashBoxes", mainBox, true, "إنشاء الصندوق الرئيسي عند تهيئة النظام");
-        //         console.log("[AuthService] Seeded default cash box successfully.");
-        //     }
-        // } catch (boxErr) {
-        //     console.error("[AuthService] Failed to check/seed default cash box:", boxErr);
-        // }
+        try {
+            const allBoxes = await dbService.getAll("cashBoxes");
+            const mainBox = allBoxes.find((b: any) => b.id === "main-box" || b.name?.trim() === "الصندوق الرئيسي");
+            if (!mainBox) {
+                console.log("[AuthService] Seeding default cash box الصندوق الرئيسي...");
+                const newMainBox = {
+                    id: "main-box",
+                    name: "الصندوق الرئيسي",
+                    balance: 0,
+                    initialBalance: 0,
+                    currency: "YER",
+                    recordStatus: 'active',
+                    isActive: true,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                };
+                await dbService.add("cashBoxes", newMainBox, true, "إنشاء الصندوق الرئيسي عند تهيئة النظام");
+                console.log("[AuthService] Seeded default cash box successfully.");
+            } else if (mainBox.recordStatus === 'deleted' || mainBox.isActive === false || mainBox.isActive === undefined) {
+                console.log("[AuthService] Ensuring main box is active and valid...");
+                await dbService.update("cashBoxes", mainBox.id, {
+                    recordStatus: 'active',
+                    isActive: true
+                });
+            }
+        } catch (boxErr) {
+            console.error("[AuthService] Failed to check/seed default cash box:", boxErr);
+        }
 
         let hasAdmin = users.some(u => u.username?.toLowerCase() === 'admin' || u.role === 'SUPER_ADMIN');
         console.log(`[AuthService] hasAdmin: ${hasAdmin}, users.length: ${users.length}`);

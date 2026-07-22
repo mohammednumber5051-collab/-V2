@@ -76,65 +76,65 @@ export const migrationService = {
     async migrateOldInvoices() {
         try {
             const invoices = await dbService.getAll("invoices");
-            const missing = invoices.filter((inv: any) => !inv.invoiceNumber).sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+            const missing = invoices.filter((inv: any) => {
+                if (inv.recordStatus === 'deleted') return false;
+                if (!inv.invoiceNumber) return true;
+                const num = parseInt(String(inv.invoiceNumber), 10);
+                return isNaN(num);
+            }).sort((a: any, b: any) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
             
+            // Calculate current max numeric invoice numbers across valid invoices
+            let maxSale = 0;
+            let maxPur = 0;
+            invoices.forEach((inv: any) => {
+                if (inv.recordStatus === 'deleted') return;
+                if (inv.invoiceNumber) {
+                    const n = parseInt(String(inv.invoiceNumber), 10);
+                    if (!isNaN(n)) {
+                        const invType = inv.type || 'sale';
+                        if (invType.includes('sale') && n > maxSale) maxSale = n;
+                        if (invType.includes('purchase') && n > maxPur) maxPur = n;
+                    }
+                }
+            });
+
             if (missing.length === 0) return;
 
-            console.log(`Migrating ${missing.length} old invoices to sequential numbers...`);
+            console.log(`Migrating ${missing.length} old/non-numeric invoices to sequential numbers (maxSale: ${maxSale}, maxPur: ${maxPur})...`);
             const isFirebase = !!db && firebaseConfig.projectId;
 
             if (isFirebase) {
-                let salesNext = 1;
-                let purchasesNext = 1;
-
-                const salesRef = doc(db, 'counters', 'sales_invoice');
-                const purRef = doc(db, 'counters', 'purchase_invoice');
-                
-                const [salesSnap, purSnap] = await Promise.all([
-                    getDoc(salesRef).catch(() => null),
-                    getDoc(purRef).catch(() => null)
-                ]);
-
-                if (salesSnap && salesSnap.exists()) salesNext = (salesSnap.data().lastNumber || 0) + 1;
-                if (purSnap && purSnap.exists()) purchasesNext = (purSnap.data().lastNumber || 0) + 1;
-
-                let salesMaxUsed = salesNext - 1;
-                let purMaxUsed = purchasesNext - 1;
+                const batch = writeBatch(db);
+                let count = 0;
 
                 for (const inv of missing) {
                     let seqNum = 1;
-                    if (inv.type === 'sale') {
-                        seqNum = salesNext++;
-                        salesMaxUsed = Math.max(salesMaxUsed, seqNum);
+                    const invType = inv.type || 'sale';
+                    if (invType.includes('sale')) {
+                        maxSale++;
+                        seqNum = maxSale;
                     } else {
-                        seqNum = purchasesNext++;
-                        purMaxUsed = Math.max(purMaxUsed, seqNum);
+                        maxPur++;
+                        seqNum = maxPur;
                     }
                     
-                    await setDoc(doc(db, 'invoices', inv.id), {
+                    batch.set(doc(db, 'invoices', inv.id), {
                         invoiceNumber: String(seqNum)
                     }, { merge: true });
+                    count++;
                 }
 
-                await setDoc(salesRef, { lastNumber: salesMaxUsed, updatedAt: new Date().toISOString() }, { merge: true });
-                await setDoc(purRef, { lastNumber: purMaxUsed, updatedAt: new Date().toISOString() }, { merge: true });
+                if (count > 0) {
+                    await batch.commit();
+                    await setDoc(doc(db, 'counters', 'sales_invoice'), { lastNumber: maxSale, updatedAt: new Date().toISOString() }, { merge: true });
+                    await setDoc(doc(db, 'counters', 'purchase_invoice'), { lastNumber: maxPur, updatedAt: new Date().toISOString() }, { merge: true });
+                }
 
             } else {
-                let maxSale = 0;
-                let maxPur = 0;
-                invoices.forEach((inv: any) => {
-                    if (inv.invoiceNumber) {
-                        const n = parseInt(inv.invoiceNumber, 10);
-                        if (!isNaN(n)) {
-                            if (inv.type === 'sale' && n > maxSale) maxSale = n;
-                            if (inv.type === 'purchase' && n > maxPur) maxPur = n;
-                        }
-                    }
-                });
-
                 for (const inv of missing) {
                     let seqNum = 1;
-                    if (inv.type === 'sale') {
+                    const invType = inv.type || 'sale';
+                    if (invType.includes('sale')) {
                         maxSale++;
                         seqNum = maxSale;
                     } else {

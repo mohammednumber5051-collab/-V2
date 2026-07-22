@@ -273,12 +273,18 @@ export const localDbService = {
         let maxInvoiceNum = 0;
         const invoices = getLocalColl("invoices");
         invoices.forEach((inv: any) => {
-            if (inv.type === invoice.type && inv.invoiceNumber) {
-                const num = parseInt(inv.invoiceNumber, 10);
+            if (inv.recordStatus === 'deleted') return;
+            const invType = inv.type || 'sale';
+            const reqType = invoice.type || 'sale';
+            const isSameCategory = (reqType.includes('sale') && invType.includes('sale')) ||
+                                   (reqType.includes('purchase') && invType.includes('purchase')) ||
+                                   (invType === reqType);
+            if (isSameCategory && inv.invoiceNumber) {
+                const num = parseInt(String(inv.invoiceNumber), 10);
                 if (!isNaN(num) && num > maxInvoiceNum) maxInvoiceNum = num;
             }
         });
-        const sequentialInvoiceNumber = String(maxInvoiceNum + 1);
+        const sequentialInvoiceNumber = invoice.invoiceNumber || String(maxInvoiceNum + 1);
 
         const invoiceId = generateId();
         const newInvoice = {

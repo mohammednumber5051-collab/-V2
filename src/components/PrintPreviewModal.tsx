@@ -10,9 +10,10 @@ interface PrintPreviewModalProps {
     htmlContent: string;
     title: string;
     paperSize?: 'a4' | 'thermal';
+    orientation?: 'portrait' | 'landscape';
 }
 
-export default function PrintPreviewModal({ isOpen, onClose, htmlContent, title, paperSize = 'a4' }: PrintPreviewModalProps) {
+export default function PrintPreviewModal({ isOpen, onClose, htmlContent, title, paperSize = 'a4', orientation = 'portrait' }: PrintPreviewModalProps) {
     const printRef = useRef<HTMLDivElement>(null);
     const [currentPaperSize, setCurrentPaperSize] = useState<'a4' | 'thermal'>(paperSize);
 
@@ -25,7 +26,7 @@ export default function PrintPreviewModal({ isOpen, onClose, htmlContent, title,
         documentTitle: title,
         pageStyle: currentPaperSize === 'thermal' 
             ? "@page { size: 80mm auto; margin: 0; } @media print { body { -webkit-print-color-adjust: exact; margin: 0; padding: 1mm 3mm; font-size: 11px; width: 80mm; } .print-container, .report-container, #invoice_wrapper { width: 100% !important; max-width: 100% !important; box-sizing: border-box !important; } }"
-            : "@page { size: A4 portrait; margin: 5mm; } @media print { body { -webkit-print-color-adjust: exact; margin: 0; zoom: 0.95; } }"
+            : `@page { size: A4 ${orientation}; margin: 5mm; } @media print { body { -webkit-print-color-adjust: exact; margin: 0; zoom: 0.95; } }`
     });
 
     const handleExportPDF = () => {
@@ -35,11 +36,21 @@ export default function PrintPreviewModal({ isOpen, onClose, htmlContent, title,
         const format = isThermal ? [80, 200] as [number, number] : 'a4';
 
         const opt = {
-            margin: isThermal ? 2 : 5,
+            margin: isThermal ? 2 : ([6, 6, 6, 6] as [number, number, number, number]),
             filename: `${title.replace(/ /g, '_')}_${Date.now()}.pdf`,
             image: { type: 'jpeg' as const, quality: 0.98 },
-            html2canvas: { scale: 2, useCORS: true },
-            jsPDF: { unit: 'mm', format: format, orientation: 'portrait' as const }
+            html2canvas: { 
+                scale: 2, 
+                useCORS: true,
+                scrollY: 0,
+                scrollX: 0,
+                letterRendering: true
+            },
+            jsPDF: { unit: 'mm', format: format, orientation: isThermal ? 'portrait' : orientation },
+            pagebreak: { 
+                mode: ['avoid-all', 'css', 'legacy'],
+                avoid: ['tr', 'th', 'td', '.summary-card', '.no-break', '.card', '.header-box', '.fin-card', '.info-item', '.cards-row']
+            }
         };
 
         html2pdf().set(opt).from(element).save();
@@ -127,14 +138,29 @@ export default function PrintPreviewModal({ isOpen, onClose, htmlContent, title,
                     <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-slate-200 dark:bg-slate-950/50 custom-scrollbar flex justify-center">
                         <div 
                             ref={printRef}
-                            className={`bg-white text-black shadow-lg origin-top transition-all overflow-hidden ${
-                                currentPaperSize === 'thermal' ? 'w-[74mm] p-2.5 text-[11px] print:w-[72mm] print:mx-auto print:p-0 print:shadow-none' : 'w-[210mm] min-h-[297mm] p-6'
+                            className={`bg-white text-black shadow-lg origin-top transition-all overflow-visible ${
+                                currentPaperSize === 'thermal' 
+                                    ? 'w-[74mm] p-2.5 text-[11px] print:w-[72mm] print:mx-auto print:p-0 print:shadow-none' 
+                                    : orientation === 'landscape'
+                                        ? 'w-[297mm] min-h-[210mm] p-6 max-w-full overflow-x-auto'
+                                        : 'w-[210mm] min-h-[297mm] p-6'
                             }`}
                             style={{ 
                                 direction: 'rtl',
                                 fontFamily: "'Cairo', sans-serif"
                             }}
-                            dangerouslySetInnerHTML={{ __html: htmlContent }}
+                            dangerouslySetInnerHTML={{ 
+                                __html: `
+                                    <style>
+                                        table { border-collapse: collapse !important; }
+                                        tr, th, td { page-break-inside: avoid !important; break-inside: avoid !important; }
+                                        thead { display: table-header-group !important; }
+                                        tfoot { display: table-footer-group !important; }
+                                        .no-break, .summary-card, .header-box, .info-grid, .fin-grid, .card, .cards-row { page-break-inside: avoid !important; break-inside: avoid !important; }
+                                    </style>
+                                    ${htmlContent}
+                                `
+                            }}
                         />
                     </div>
 

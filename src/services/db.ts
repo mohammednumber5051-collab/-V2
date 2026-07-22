@@ -48,6 +48,18 @@ export const dbService = {
             return localData;
         }
     },
+    async getById(collectionName: string, id: string) {
+        try {
+            const snap = await getDoc(doc(db, collectionName, id));
+            if (snap.exists()) {
+                return { ...snap.data(), id: snap.id };
+            }
+        } catch (e) {
+            console.warn(`[dbService] getById ${collectionName}/${id} failed, attempting localDb fallback:`, e);
+        }
+        const localData = await localDbService.getAll(collectionName);
+        return localData.find((item: any) => item.id === id) || null;
+    },
     async getPaginated(collectionName, pageSize, lastVisible, filters = []) {
         const constraints = [];
         filters.forEach(f => constraints.push(where(f.field, f.op, f.value)));
@@ -104,8 +116,34 @@ export const dbService = {
             invoice.partnerId = partnerId;
         }
 
+        // Auto-calculate sequential numeric invoiceNumber if not provided
+        let invoiceNumber = invoice.invoiceNumber;
+        if (!invoiceNumber) {
+            try {
+                const invoices = await this.getAll("invoices");
+                let maxNum = 0;
+                invoices.forEach((inv: any) => {
+                    if (inv.recordStatus === 'deleted') return;
+                    const invType = inv.type || 'sale';
+                    const isSameCategory = (type.includes('sale') && invType.includes('sale')) ||
+                                           (type.includes('purchase') && invType.includes('purchase')) ||
+                                           (invType === type);
+                    if (isSameCategory && inv.invoiceNumber) {
+                        const num = parseInt(String(inv.invoiceNumber), 10);
+                        if (!isNaN(num) && num > maxNum) {
+                            maxNum = num;
+                        }
+                    }
+                });
+                invoiceNumber = String(maxNum + 1);
+            } catch (e) {
+                console.warn("Failed to calculate sequential invoice number", e);
+                invoiceNumber = String(Date.now());
+            }
+        }
+
         // Save the invoice
-        batch.set(invRef, cleanData({ ...invoice, id: invRef.id, isSystemFixed: true, createdAt: new Date().toISOString() }));
+        batch.set(invRef, cleanData({ ...invoice, invoiceNumber, id: invRef.id, isSystemFixed: true, createdAt: invoice.createdAt || new Date().toISOString() }));
         
         // Update partner balance
         if (partnerId) {

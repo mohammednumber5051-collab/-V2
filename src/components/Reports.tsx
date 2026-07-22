@@ -5,13 +5,17 @@ import {
     Calendar,
     Wallet,
     DollarSign,
-    Briefcase
+    Briefcase,
+    FileSpreadsheet,
+    FileText
 } from "lucide-react";
+import * as XLSX from "xlsx";
 import { dbService } from "../services/db";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
 import { calculateUnifiedCashBalances } from "../lib/financialUtils";
 import { CashBox, Transaction, Invoice, Voucher, QuickFinancialEntry } from "../types";
+import PrintPreviewModal from "./PrintPreviewModal";
 
 export default function Reports() {
     const [dailySummaries, setDailySummaries] = useState<any[]>([]);
@@ -21,6 +25,113 @@ export default function Reports() {
 
     const [timeRange, setTimeRange] = useState<'today' | 'week' | 'month' | 'year'>("month");
     const [activeTab, setActiveTab] = useState<"executive" | "sales" | "profit">("executive");
+    const [printPreview, setPrintPreview] = useState<{
+        isOpen: boolean;
+        html: string;
+        title: string;
+    }>({ isOpen: false, html: '', title: '' });
+
+    const handleExportExcel = () => {
+        const sheetData = [
+            ["التقارير التحليلية والمالية - ملخص الأداء المالي"],
+            [`تاريخ الإصدار: ${new Date().toLocaleString('ar-EG')}`],
+            [],
+            ["المؤشر المالي", "القيمة (YER)"],
+            ["إجمالي الرصيد النقدي المتاح", liveStats.totalCash],
+            ["إجمالي المبيعات للتاريخ", liveStats.totalSales],
+            ["إجمالي المصروفات للتاريخ", liveStats.totalExpenses],
+            ["صافي الأرباح التشغيلية", liveStats.netProfit],
+            [],
+            ["التاريخ", "المبيعات", "المشتريات", "المصروفات", "الأرباح"],
+            ...dailySummaries.map(s => [
+                s.date,
+                s.salesTotal || 0,
+                s.purchasesTotal || 0,
+                s.expensesTotal || 0,
+                s.profitsTotal || 0
+            ])
+        ];
+
+        const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
+        worksheet['!dir'] = 'rtl';
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, "التقرير المالي");
+        XLSX.writeFile(workbook, `التقرير_المالي_التحليلي_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    };
+
+    const handleExportPDF = () => {
+        const pdfHTML = `
+            <style>
+                @page { size: A4 portrait; margin: 10mm; }
+                body { font-family: 'Cairo', sans-serif; direction: rtl; padding: 10px; color: #0f172a; }
+                .header { border-bottom: 2px solid #1e1b4b; padding-bottom: 12px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+                .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 20px; }
+                .card { background: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; text-align: center; }
+                .card-title { font-size: 11px; font-weight: bold; color: #64748b; }
+                .card-val { font-size: 16px; font-weight: 900; font-family: monospace; color: #0f172a; margin-top: 4px; }
+                table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 15px; }
+                th { background: #1e1b4b; color: white; padding: 8px; border: 1px solid #312e81; text-align: right; }
+                td { padding: 8px; border: 1px solid #cbd5e1; text-align: right; }
+                tr:nth-child(even) { background: #f8fafc; }
+            </style>
+            <div class="header">
+                <div>
+                    <h2 style="margin:0; font-size:20px; color:#1e1b4b;">التقرير التحليلي المالي الشامل</h2>
+                    <div style="font-size:11px; color:#64748b; margin-top:4px;">تاريخ التصدير: ${new Date().toLocaleString('ar-EG')}</div>
+                </div>
+            </div>
+
+            <div class="grid">
+                <div class="card">
+                    <div class="card-title">إجمالي الرصيد النقدي</div>
+                    <div class="card-val">${liveStats.totalCash.toLocaleString()} YER</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">إجمالي المبيعات</div>
+                    <div class="card-val">${liveStats.totalSales.toLocaleString()} YER</div>
+                </div>
+                <div class="card">
+                    <div class="card-title">إجمالي المصروفات</div>
+                    <div class="card-val">${liveStats.totalExpenses.toLocaleString()} YER</div>
+                </div>
+                <div class="card" style="background:#ecfdf5; border-color:#a7f3d0;">
+                    <div class="card-title" style="color:#047857;">صافي الأرباح الوظيفي</div>
+                    <div class="card-val" style="color:#065f46;">${liveStats.netProfit.toLocaleString()} YER</div>
+                </div>
+            </div>
+
+            <h3 style="font-size:14px; font-weight:bold; margin-top:20px; color:#1e1b4b;">سجل الملخصات اليومية الأخيرة</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>التاريخ</th>
+                        <th>المبيعات</th>
+                        <th>المشتريات</th>
+                        <th>المصروفات</th>
+                        <th>الأرباح التشغيلية</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${dailySummaries.slice(-15).map(s => `
+                        <tr>
+                            <td style="font-family:monospace; font-weight:bold;">${s.date}</td>
+                            <td style="font-family:monospace; color:#312e81; font-weight:bold;">${(s.salesTotal || 0).toLocaleString()}</td>
+                            <td style="font-family:monospace;">${(s.purchasesTotal || 0).toLocaleString()}</td>
+                            <td style="font-family:monospace; color:#e11d48;">${(s.expensesTotal || 0).toLocaleString()}</td>
+                            <td style="font-family:monospace; color:#059669; font-weight:bold;">${(s.profitsTotal || 0).toLocaleString()}</td>
+                        </tr>
+                    `).join('')}
+                    ${dailySummaries.length === 0 ? '<tr><td colSpan="5" style="text-align:center;">لا توجد بيانات مسجلة.</td></tr>' : ''}
+                </tbody>
+            </table>
+        `;
+
+        setPrintPreview({
+            isOpen: true,
+            html: pdfHTML,
+            title: `التقرير_المالي_${new Date().toISOString().slice(0, 10)}`
+        });
+    };
 
     useEffect(() => {
         loadData();
@@ -105,8 +216,26 @@ export default function Reports() {
             {/* Header Area */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
                 <div className="relative z-10 space-y-2">
-                    <h1 className="text-2xl font-black">التقارير التحليلية</h1>
+                    <h1 className="text-2xl font-black">التقارير التحليلية والمالية</h1>
                     <p className="text-sm font-medium text-slate-400">لوحة تحكم الأداء المالي المبنية على محرك التجميع</p>
+                </div>
+                <div className="relative z-10 flex items-center gap-3 w-full md:w-auto">
+                    <button
+                        onClick={handleExportExcel}
+                        className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black shadow-lg shadow-emerald-900/30 transition-all cursor-pointer"
+                        title="تصدير التقرير المالي إلى ملف Excel"
+                    >
+                        <FileSpreadsheet size={16} />
+                        <span>تصدير Excel</span>
+                    </button>
+                    <button
+                        onClick={handleExportPDF}
+                        className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-black shadow-lg shadow-rose-900/30 transition-all cursor-pointer"
+                        title="تصدير التقرير المالي إلى PDF بصفحة A4"
+                    >
+                        <FileText size={16} />
+                        <span>تصدير PDF (A4)</span>
+                    </button>
                 </div>
             </div>
 
@@ -242,6 +371,15 @@ export default function Reports() {
                     )}
                 </motion.div>
             </AnimatePresence>
+
+            <PrintPreviewModal
+                isOpen={printPreview.isOpen}
+                onClose={() => setPrintPreview(prev => ({ ...prev, isOpen: false }))}
+                htmlContent={printPreview.html}
+                title={printPreview.title}
+                paperSize="a4"
+                orientation="portrait"
+            />
         </div>
     );
 }

@@ -6,7 +6,7 @@ import { cn, hasPermission } from "../lib/utils";
 import { motion, AnimatePresence } from "motion/react";
 import { syncEngine } from "../services/syncEngine";
 
-export default function Vouchers({ currentUser }: { currentUser: AppUser }) {
+export default function Vouchers({ currentUser, targetVoucherId }: { currentUser: AppUser; targetVoucherId?: string }) {
     const [vouchers, setVouchers] = useState<Voucher[]>([]);
     const [cashBoxes, setCashBoxes] = useState<CashBox[]>([]);
     const [partners, setPartners] = useState<(Customer | Supplier)[]>([]);
@@ -28,6 +28,16 @@ export default function Vouchers({ currentUser }: { currentUser: AppUser }) {
         });
         return unsubscribe;
     }, []);
+
+    useEffect(() => {
+        if (!targetVoucherId || vouchers.length === 0) return;
+        const found = vouchers.find(v => v.id === targetVoucherId);
+        if (found) {
+            setEditingVoucher(found);
+            setForm(found);
+            setIsModalOpen(true);
+        }
+    }, [targetVoucherId, vouchers]);
 
     const loadData = async () => {
         const [v, boxes, customers, suppliers] = await Promise.all([

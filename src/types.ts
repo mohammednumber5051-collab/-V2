@@ -336,6 +336,8 @@ export interface FinancialMovement {
     originalId: string;
     source: 'invoice' | 'voucher' | 'quickEntry' | 'transaction';
     recordType: string;
+    documentNumber?: string;
+    referenceNumber?: string;
     paymentType: string;
     partnerName: string;
     totalAmount: number;
