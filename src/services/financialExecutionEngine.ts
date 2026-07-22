@@ -1,6 +1,6 @@
 import { db, doc, collection, increment, runTransaction, getDocs, query, writeBatch, where } from "../firebase";
 import { AggregationEngine, AggregationImpact } from "./aggregationEngine";
-import { calculateUnifiedCashBalances } from "../lib/financialUtils";
+import { calculateUnifiedCashBalances, calculateUnifiedPartnerBalances } from "../lib/financialUtils";
 import { FinancialEngine as OldFinancialEngine } from "./financialEngine";
 
 // local cleanData function since db.ts doesn't export it
@@ -437,6 +437,8 @@ export class FinancialExecutionEngine {
 
         const transactions = transSnap.docs.map(d => ({ ...d.data(), id: d.id }));
         const boxes = allBoxes.docs.map(d => ({ ...d.data(), id: d.id }));
+        const customers = allCust.docs.map(d => ({ ...d.data(), id: d.id }));
+        const suppliers = allSup.docs.map(d => ({ ...d.data(), id: d.id }));
         const invoices = allInv.docs.map(d => ({ ...d.data(), id: d.id }));
         const vouchers = allVch.docs.map(d => ({ ...d.data(), id: d.id }));
         const quickEntries = allQE.docs.map(d => ({ ...d.data(), id: d.id }));
@@ -450,7 +452,33 @@ export class FinancialExecutionEngine {
             quickEntries as any[]
         );
 
-        // 3. Batch Update Box Balances
+        // Sale/purchase invoices+entries are split per partner type so customers are never
+        // matched against supplier-only invoices and vice versa (and to avoid re-summing
+        // the same invoice list twice under two different partner sets).
+        const saleInvoices = (invoices as any[]).filter(inv => (inv.type || 'sale').startsWith('sale'));
+        const purchaseInvoices = (invoices as any[]).filter(inv => (inv.type || 'sale').startsWith('purchase'));
+        const saleQuickEntries = (quickEntries as any[]).filter(qe => qe.entryType !== 'manual_purchase');
+        const purchaseQuickEntries = (quickEntries as any[]).filter(qe => qe.entryType === 'manual_purchase');
+
+        const customerBalances = calculateUnifiedPartnerBalances(
+            customers as any[],
+            transactions as any[],
+            saleInvoices,
+            vouchers as any[],
+            saleQuickEntries,
+            'customer'
+        );
+
+        const supplierBalances = calculateUnifiedPartnerBalances(
+            suppliers as any[],
+            transactions as any[],
+            purchaseInvoices,
+            vouchers as any[],
+            purchaseQuickEntries,
+            'supplier'
+        );
+
+        // 3. Batch Update Balances (cash boxes + customers + suppliers)
         let batch = writeBatch(db);
         let count = 0;
 
@@ -470,9 +498,17 @@ export class FinancialExecutionEngine {
             await updateBatch(doc(db, "cashBoxes", bId), { balance: boxBalances[bId], updatedAt: nowIso });
         }
 
+        for (const cId of Object.keys(customerBalances)) {
+            await updateBatch(doc(db, "customers", cId), { balance: customerBalances[cId].remaining, updatedAt: nowIso });
+        }
+
+        for (const sId of Object.keys(supplierBalances)) {
+            await updateBatch(doc(db, "suppliers", sId), { balance: supplierBalances[sId].remaining, updatedAt: nowIso });
+        }
+
         if (count > 0) await batch.commit();
 
-        console.log("Financial State Rebuild Completed Successfully.");
+        console.log("Financial State Rebuild Completed Successfully (cash boxes + customers + suppliers).");
         return true;
     }
 
