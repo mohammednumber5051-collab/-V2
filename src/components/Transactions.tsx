@@ -167,9 +167,12 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
   }, [activeTab, currentUser]);
 
   const ensureActiveCashBoxes = async (rawBoxes: any[]): Promise<CashBox[]> => {
-    let boxesList = [...(rawBoxes || [])];
-    const mainBox = boxesList.find(b => b.id === 'main-box' || b.name?.trim() === 'الصندوق الرئيسي');
-    if (!mainBox) {
+    let boxesList = [...(rawBoxes || [])].filter(b => b && b.recordStatus !== 'deleted');
+    
+    // Find all boxes named 'الصندوق الرئيسي'
+    const mainBoxes = boxesList.filter(b => b.name?.trim() === 'الصندوق الرئيسي');
+    
+    if (mainBoxes.length === 0) {
       const newMainBox: CashBox = {
         id: "main-box",
         name: "الصندوق الرئيسي",
@@ -187,16 +190,54 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
         console.warn("Failed to seed main box in DB", e);
       }
       boxesList.push(newMainBox);
-    } else if (mainBox.recordStatus === 'deleted' || mainBox.isActive === false || mainBox.isActive === undefined) {
-      mainBox.recordStatus = 'active';
-      mainBox.isActive = true;
-      try {
-        await dbService.update("cashBoxes", mainBox.id, { recordStatus: 'active', isActive: true });
-      } catch (e) {
-        console.warn("Failed to reactivate main box", e);
+    } else {
+      // Pick the primary main box (prefer id === 'main-box', else first)
+      const primaryMainBox = mainBoxes.find(b => b.id === 'main-box') || mainBoxes[0];
+      
+      // Delete any duplicate main boxes from database
+      for (const dup of mainBoxes) {
+        if (dup.id !== primaryMainBox.id) {
+          try {
+            await dbService.delete("cashBoxes", dup.id);
+            console.log(`[CleanUp] Removed duplicate main box with ID: ${dup.id}`);
+          } catch (e) {
+            console.warn("Failed to delete duplicate main box", e);
+          }
+        }
+      }
+      
+      // Ensure primary main box is active
+      if (primaryMainBox.recordStatus === 'deleted' || primaryMainBox.isActive === false || primaryMainBox.isActive === undefined) {
+        primaryMainBox.recordStatus = 'active';
+        primaryMainBox.isActive = true;
+        try {
+          await dbService.update("cashBoxes", primaryMainBox.id, { recordStatus: 'active', isActive: true });
+        } catch (e) {
+          console.warn("Failed to reactivate main box", e);
+        }
       }
     }
-    return boxesList as CashBox[];
+
+    // Strict deduplication by ID and by Name for display
+    const uniqueMap = new Map<string, CashBox>();
+    const seenNames = new Set<string>();
+
+    for (const box of boxesList) {
+      if (!box || !box.id) continue;
+      const normalizedName = box.name?.trim() || "";
+      
+      // If it's a main box duplicate that wasn't filtered, skip
+      if (normalizedName === "الصندوق الرئيسي" && uniqueMap.has("main-box") && box.id !== "main-box") {
+        continue;
+      }
+      
+      if (!uniqueMap.has(box.id) && (!normalizedName || !seenNames.has(normalizedName) || normalizedName !== "الصندوق الرئيسي")) {
+        uniqueMap.set(box.id, box);
+        if (normalizedName) seenNames.add(normalizedName);
+      }
+    }
+
+    return Array.from(uniqueMap.values());
   };
 
   const loadStaticData = async () => {
@@ -269,9 +310,26 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
         const uniqueTxs = deduplicateTransactionShadows(deduplicateById(txs as Transaction[]));
 
         const validBoxes = await ensureActiveCashBoxes(boxes as any[]);
-        setCashBoxes(validBoxes);
 
-        const boxMap = new Map((validBoxes as any[]).map(b => [b.id, b.name]));
+        const { boxBalances } = calculateUnifiedCashBalances(
+            validBoxes,
+            uniqueTxs as any[],
+            uniqueInvs as any[],
+            uniqueVchs as any[],
+            uniqueQes as any[]
+        );
+
+        const syncedBoxes = validBoxes.map(b => {
+            const calculatedBal = boxBalances[b.id] !== undefined ? boxBalances[b.id] : (b.balance || 0);
+            if (Math.abs((b.balance || 0) - calculatedBal) > 0.001) {
+                dbService.update("cashBoxes", b.id, { balance: calculatedBal }).catch(err => console.warn("Auto-sync cash box balance failed", err));
+            }
+            return { ...b, balance: calculatedBal };
+        });
+
+        setCashBoxes(syncedBoxes);
+
+        const boxMap = new Map((syncedBoxes as any[]).map(b => [b.id, b.name]));
 
         const allMovements: FinancialMovement[] = [];
 

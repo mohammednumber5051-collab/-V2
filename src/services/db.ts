@@ -22,7 +22,6 @@ export const cleanData = (obj: any): any => {
 };
 
 import { AggregationEngine } from "./aggregationEngine";
-import { FinancialEngine } from "./financialEngine";
 
 function checkShouldBypassRemote() { return false; }
 
@@ -236,29 +235,6 @@ export const dbService = {
             });
         }
 
-        // Soft-delete any ledger (transactions) records tied to this invoice, so they stop
-        // being counted by reconciliation/report calculations after the invoice is gone.
-        try {
-            const linkedSnap = await getDocs(query(collection(db, "transactions"), where("sourceId", "==", invoice.id)));
-            linkedSnap.docs.forEach(d => {
-                batch.update(d.ref, { recordStatus: 'deleted', updatedAt: new Date().toISOString() });
-            });
-        } catch (e) {
-            console.error("Failed to soft-delete transactions linked to deleted invoice:", e);
-        }
-
-        // Reverse this invoice's contribution to the dashboard/daily/monthly report totals,
-        // so reports don't keep showing a sale/purchase that no longer exists.
-        try {
-            const u = authService.getCurrentUser();
-            const reversedImpact = FinancialEngine.getInvoiceImpact(invoice, u, true).aggregationImpact;
-            if (reversedImpact) {
-                AggregationEngine.applyFinancialImpact(batch, new Date(invoice.createdAt || Date.now()), reversedImpact);
-            }
-        } catch (e) {
-            console.error("Failed to reverse report totals for deleted invoice:", e);
-        }
-
         await batch.commit();
     },
     async updateInvoiceData(oldInvoice, newInvoice) {
@@ -357,18 +333,6 @@ export const dbService = {
             }
         });
 
-        // Reconcile dashboard/daily/monthly report totals: remove the old invoice's
-        // contribution and apply the new one, so edited invoices don't leave stale numbers.
-        try {
-            const u = authService.getCurrentUser();
-            const oldReversed = FinancialEngine.getInvoiceImpact(oldInvoice, u, true).aggregationImpact;
-            const newApplied = FinancialEngine.getInvoiceImpact(newInvoice, u, false).aggregationImpact;
-            if (oldReversed) AggregationEngine.applyFinancialImpact(batch, new Date(oldInvoice.createdAt || Date.now()), oldReversed);
-            if (newApplied) AggregationEngine.applyFinancialImpact(batch, new Date(newInvoice.createdAt || Date.now()), newApplied);
-        } catch (e) {
-            console.error("Failed to reconcile report totals for edited invoice:", e);
-        }
-
         await batch.commit();
     },
     async addTransaction(trans) {
@@ -423,7 +387,7 @@ export const dbService = {
     },
     async deleteTransactionData(trans) {
         const batch = writeBatch(db);
-        batch.update(doc(db, "transactions", trans.id), { recordStatus: 'deleted', updatedAt: new Date().toISOString() });
+        batch.delete(doc(db, "transactions", trans.id));
 
         if (trans.type === "تحويل") {
             if (trans.fromBoxId) {
@@ -513,33 +477,7 @@ export const dbService = {
             batch.update(doc(db, partnerColl, invoice.partnerId), { balance: increment(balChange) });
         }
 
-        // Write the missing ledger record for this payment. Without this, the payment moves
-        // money and updates balances but leaves no transaction/receipt trail, which is exactly
-        // what causes stored balances to drift from what invoices/receipts actually show.
-        const now = new Date().toISOString();
-        const transType = invoice.type.includes('sale') ? 'قبض' : 'صرف';
-        const u = authService.getCurrentUser();
-        const transRef = doc(collection(db, "transactions"));
-        batch.set(transRef, cleanData({
-            id: transRef.id,
-            type: transType,
-            amount: amount,
-            currency: invoice.currency || 'YER',
-            description: `دفعة من الحساب للفاتورة: #${invoice.invoiceNumber || invoice.id?.slice(0, 8).toUpperCase()}`,
-            partnerId: invoice.partnerId,
-            partnerName: invoice.partnerName,
-            boxId: boxId,
-            relatedId: invoice.id,
-            sourceType: 'invoice_payment',
-            sourceId: invoice.id,
-            recordStatus: 'active',
-            createdAt: now,
-            updatedAt: now,
-            createdBy: u?.name || 'System',
-        }));
-
         await batch.commit();
-        return transRef.id;
     },
     async deleteAllTransactions() {},
     async createTransfer(fromBoxId, toBoxId, amount, currency, description) {

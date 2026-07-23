@@ -212,9 +212,7 @@ export class FinancialEngine {
         if (transType === 'قبض') {
             if (entry.entryType === 'manual_sale') {
                 agg.salesTotal = entry.netAmount * mult;
-                // NOTE: manual quick-sale entries have no recorded cost/purchase price, so we
-                // cannot know the real profit. We intentionally do NOT add this to profitsTotal
-                // (previously it assumed 100% profit, which inflated the profit report).
+                agg.profitsTotal = entry.netAmount * mult; // Assuming 100% profit for manual entries
             } else {
                 agg.receiptsTotal = entry.netAmount * mult;
             }
