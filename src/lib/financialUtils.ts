@@ -280,3 +280,165 @@ export function calculateUnifiedPartnerBalances(
 
     return partnerBalances;
 }
+
+// ✅ NEW: Get Partner Account Statement
+// Returns chronologically ordered transactions with running balances
+// partnerType: 'customer' (sales invoices) or 'supplier' (purchase invoices)
+export function getPartnerStatement(
+    partnerId: string,
+    invoices: any[],
+    transactions: any[],
+    partnerData: any,
+    dateStart: string = '1970-01-01',
+    dateEnd: string = '2099-12-31'
+): any {
+    const entries: any[] = [];
+    let runningBalance = 0;
+
+    // Filter relevant transactions
+    const relevantTransactions = transactions
+        .filter(t => 
+            t.partnerId === partnerId &&
+            t.recordStatus !== 'deleted' &&
+            t.createdAt >= dateStart &&
+            t.createdAt <= dateEnd
+        )
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    // Calculate opening balance (before date range)
+    const beforeTransactions = transactions
+        .filter(t =>
+            t.partnerId === partnerId &&
+            t.recordStatus !== 'deleted' &&
+            t.createdAt < dateStart
+        )
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    // Opening balance calculation
+    let openingBalance = 0;
+    beforeTransactions.forEach(t => {
+        openingBalance += (t.debit || 0) - (t.credit || 0);
+    });
+    runningBalance = openingBalance;
+
+    // Process transactions in chronological order
+    relevantTransactions.forEach(t => {
+        const amount = (t.debit || 0) - (t.credit || 0);
+        runningBalance += amount;
+
+        entries.push({
+            date: t.createdAt,
+            description: t.description || 'عملية',
+            type: amount >= 0 ? 'debit' : 'credit',
+            amount: Math.abs(amount),
+            balance: runningBalance,
+            referenceId: t.sourceId,
+            referenceType: t.sourceType
+        });
+    });
+
+    return {
+        partnerId: partnerId,
+        partnerName: partnerData?.name || 'Unknown',
+        partnerType: partnerData?.type || 'customer',
+        currency: 'YER',
+        openingBalance: openingBalance,
+        closingBalance: runningBalance,
+        totalDebits: entries.filter(e => e.type === 'debit').reduce((sum, e) => sum + e.amount, 0),
+        totalCredits: entries.filter(e => e.type === 'credit').reduce((sum, e) => sum + e.amount, 0),
+        entries: entries,
+        periodStart: dateStart,
+        periodEnd: dateEnd,
+        generatedAt: new Date().toISOString()
+    };
+}
+
+// ✅ NEW: Get Cash Box Account Statement
+// Returns chronologically ordered cash box transactions with running balances
+export function getCashBoxStatement(
+    boxId: string,
+    transactions: any[],
+    boxData: any,
+    dateStart: string = '1970-01-01',
+    dateEnd: string = '2099-12-31'
+): any {
+    const entries: any[] = [];
+    let runningBalance = 0;
+
+    // Filter relevant transactions
+    const relevantTransactions = transactions
+        .filter(t =>
+            (t.boxId === boxId || t.fromBoxId === boxId || t.toBoxId === boxId) &&
+            t.recordStatus !== 'deleted' &&
+            t.createdAt >= dateStart &&
+            t.createdAt <= dateEnd
+        )
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    // Calculate opening balance
+    const beforeTransactions = transactions
+        .filter(t =>
+            (t.boxId === boxId || t.fromBoxId === boxId || t.toBoxId === boxId) &&
+            t.recordStatus !== 'deleted' &&
+            t.createdAt < dateStart
+        )
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    let openingBalance = boxData?.initialBalance || 0;
+    beforeTransactions.forEach(t => {
+        if (t.boxId === boxId) {
+            openingBalance += (t.credit || 0) - (t.debit || 0); // Cash in - Cash out
+        } else if (t.fromBoxId === boxId) {
+            openingBalance -= (t.amount || 0); // Transfer out
+        } else if (t.toBoxId === boxId) {
+            openingBalance += (t.amount || 0); // Transfer in
+        }
+    });
+    runningBalance = openingBalance;
+
+    // Process transactions
+    relevantTransactions.forEach(t => {
+        let amount = 0;
+        let type = 'debit';
+
+        if (t.boxId === boxId) {
+            // Direct transaction to this box
+            amount = (t.credit || 0) - (t.debit || 0); // Positive = in, Negative = out
+            type = amount >= 0 ? 'credit' : 'debit';
+        } else if (t.fromBoxId === boxId) {
+            // Transfer out
+            amount = -(t.amount || 0);
+            type = 'debit';
+        } else if (t.toBoxId === boxId) {
+            // Transfer in
+            amount = (t.amount || 0);
+            type = 'credit';
+        }
+
+        runningBalance += amount;
+
+        entries.push({
+            date: t.createdAt,
+            description: t.description || 'عملية',
+            type: type,
+            amount: Math.abs(amount),
+            balance: runningBalance,
+            referenceId: t.sourceId || t.id,
+            referenceType: t.sourceType
+        });
+    });
+
+    return {
+        boxId: boxId,
+        boxName: boxData?.name || 'Unknown',
+        currency: boxData?.currency || 'YER',
+        openingBalance: openingBalance,
+        closingBalance: runningBalance,
+        totalIn: entries.filter(e => e.type === 'credit').reduce((sum, e) => sum + e.amount, 0),
+        totalOut: entries.filter(e => e.type === 'debit').reduce((sum, e) => sum + e.amount, 0),
+        entries: entries,
+        periodStart: dateStart,
+        periodEnd: dateEnd,
+        generatedAt: new Date().toISOString()
+    };
+}

@@ -249,4 +249,47 @@ export class FinancialEngine {
 
         return { transactions: isReversion ? [] : transactions, partnerBalanceChange, cashBoxBalanceChange, aggregationImpact: agg };
     }
+
+    // ✅ NEW: Record Expense Transaction
+    // Records an expense (rent, salary, utilities, etc) directly from a cash box
+    // Accounting entry:
+    //   Debit: Expense Account (impacts P&L)
+    //   Credit: Cash (reduces cash box balance)
+    static recordExpense(expense: any, user: any) {
+        const { category, description, amount, boxId, boxName, notes, createdAt } = expense;
+        const now = createdAt || new Date().toISOString();
+        
+        const transactions = [];
+        const currency = expense.currency || 'YER';
+
+        // ✅ Single transaction for expense
+        // Type: صرف (outflow)
+        // Source: expense
+        // Debit = 0 (expense accrual)
+        // Credit = amount (cash reduction)
+        transactions.push({
+            type: 'صرف',
+            sourceType: 'expense',
+            sourceId: expense.id || 'new',
+            amount: amount,
+            currency: currency,
+            description: `مصروف - ${category}: ${description}`,
+            boxId: boxId,
+            debit: amount,        // ✅ Expense account (P&L impact)
+            credit: 0,            // ✅ Cash reduction handled separately
+            createdBy: user.name,
+            createdAt: now
+        });
+
+        // ✅ Aggregation Impact
+        const agg: any = {};
+        agg.expensesTotal = amount;  // Expenses increase
+        agg.cashBalanceChange = -amount; // Cash box decreases
+        
+        return {
+            transactions: transactions,
+            cashBoxBalanceChange: -amount,  // Reduce cash box
+            aggregationImpact: agg
+        };
+    }
 }

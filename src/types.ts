@@ -250,6 +250,26 @@ export interface CashBox {
     createdAt: string;
 }
 
+// ✅ NEW: Expense Record Interface
+export interface Expense {
+    id?: string;
+    category: ExpenseCategory;
+    description: string;
+    amount: number;
+    currency: Currency;
+    boxId: string;              // Required: Which cash box to deduct from
+    boxName: string;            // For reference
+    paymentMethod?: 'نقدآ' | 'شيك' | 'تحويل بنكي' | 'أخرى';
+    reference?: string;         // e.g., invoice number, check number
+    notes?: string;
+    approvedBy?: string;        // Optional approval
+    approvalDate?: string;
+    recordStatus?: RecordStatus;
+    createdBy: string;
+    createdAt: string;
+    updatedAt?: string;
+}
+
 export type TransactionSourceType = 
     | 'sales_invoice' 
     | 'purchase_invoice' 
@@ -258,7 +278,22 @@ export type TransactionSourceType =
     | 'manual_payment' 
     | 'invoice_payment'
     | 'adjustment' 
-    | 'transfer';
+    | 'transfer'
+    | 'expense';  // ✅ NEW: For expense transactions
+
+// ✅ NEW: Expense Categories
+export type ExpenseCategory = 
+    | 'الإيجار'              // Rent
+    | 'الفواتير'            // Utilities (electricity, water, etc)
+    | 'الأجور'              // Salaries
+    | 'المرتبات'            // Wages
+    | 'النقل'               // Transportation
+    | 'الصيانة'             // Maintenance
+    | 'الإعلان'             // Advertising
+    | 'المكتب'              // Office Supplies
+    | 'التأمين'             // Insurance
+    | 'الضرائب'             // Taxes
+    | 'أخرى';               // Other
 
 export interface Transaction {
     id?: string;
@@ -350,6 +385,48 @@ export interface FinancialMovement {
     createdAt: string;
     dateObj: Date;
     originalRecord: any;
+}
+
+// ✅ NEW: Statement Entry for Account Statements
+export interface StatementEntry {
+    date: string;               // ISO date string
+    description: string;
+    type: 'debit' | 'credit';  // For partner: debit=customer owes, credit=customer paid
+    amount: number;
+    balance: number;            // Running balance
+    referenceId?: string;
+    referenceType?: string;     // 'invoice', 'expense', 'payment', etc
+}
+
+// ✅ NEW: Partner Account Statement
+export interface PartnerStatement {
+    partnerId: string;
+    partnerName: string;
+    partnerType: 'customer' | 'supplier';
+    currency: Currency;
+    openingBalance: number;
+    closingBalance: number;
+    totalDebits: number;        // Total owed to/by partner
+    totalCredits: number;       // Total paid/collected
+    entries: StatementEntry[];
+    periodStart: string;        // ISO date
+    periodEnd: string;          // ISO date
+    generatedAt: string;
+}
+
+// ✅ NEW: Cash Box Account Statement
+export interface CashBoxStatement {
+    boxId: string;
+    boxName: string;
+    currency: Currency;
+    openingBalance: number;
+    closingBalance: number;
+    totalIn: number;            // Total cash in (receipts)
+    totalOut: number;           // Total cash out (payments, expenses)
+    entries: StatementEntry[];
+    periodStart: string;        // ISO date
+    periodEnd: string;          // ISO date
+    generatedAt: string;
 }
 
 export type QuickEntryType = 'manual_sale' | 'manual_purchase' | 'receipt' | 'payment' | 'adjustment';
