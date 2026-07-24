@@ -179,6 +179,8 @@ export function calculateUnifiedPartnerBalances(
     });
 
     // 1. Process Invoices
+    // ✅ UNIFIED: Consistent calculation for invoice impact on partner balances
+    // Formula: total = netAmount (after discount), paid = cash received/paid, remaining = total - paid
     uniqueInvoices.forEach(inv => {
         if (inv.recordStatus === 'deleted' || !inv.partnerId) return;
         if (!partnerBalances[inv.partnerId]) return;
@@ -187,12 +189,17 @@ export function calculateUnifiedPartnerBalances(
         const isReturn = type.includes('return');
         const baseType = type.replace('_return', '');
         
+        // ✅ CRITICAL: Calculate net amount AFTER discount
+        // Example: Invoice 1000 with 100 discount = 900 net
+        // Remaining = 900 (net) - 500 (paid) = 400
         const netAmount = (inv.total || 0) - (inv.discount || 0);
-        // If it's a return, it reduces the total balance (debt)
+        
+        // ✅ RETURNS: If it's a return, it reduces the total balance (customer/supplier owes less)
         const sign = isReturn ? -1 : 1;
         partnerBalances[inv.partnerId].total += (netAmount * sign);
 
-        // If no transactions exist for this invoice, use the 'paid' field
+        // ✅ PAYMENTS: If no transactions exist for this invoice, use the 'paid' field
+        // This applies to legacy invoices created without explicit transaction records
         if (!invoiceIdsWithTransactions.has(inv.id!)) {
             partnerBalances[inv.partnerId].paid += ((inv.paid || 0) * sign);
         }
@@ -264,7 +271,9 @@ export function calculateUnifiedPartnerBalances(
         }
     });
 
-    // Calculate remaining
+    // ✅ FINAL CALCULATION: Remaining balance
+    // Remaining = Total Invoice Amount (after discount) - Total Paid Amount
+    // Example: 900 (total after 100 discount) - 500 (paid) = 400 (remaining due)
     Object.keys(partnerBalances).forEach(id => {
         partnerBalances[id].remaining = partnerBalances[id].total - partnerBalances[id].paid;
     });
