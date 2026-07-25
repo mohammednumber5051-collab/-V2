@@ -18,8 +18,7 @@ import { cn } from "../lib/utils";
 import { calculateUnifiedCashBalances, calculateTotalRevenue, calculateCOGS, calculateNetIncome, calculateOperatingExpenses, generateIncomeStatement, generatePerformanceAnalysis } from "../lib/financialUtils";
 import { CashBox, Transaction, Invoice, Voucher, QuickFinancialEntry } from "../types";
 import PrintPreviewModal from "./PrintPreviewModal";
-import IncomeStatementReport from "./IncomeStatementReport";
-import PerformanceAnalysis from "./PerformanceAnalysis";
+import PerformanceAnalysisReport from "./PerformanceAnalysisReport";
 
 export default function Reports() {
     const [dailySummaries, setDailySummaries] = useState<any[]>([]);
@@ -177,16 +176,20 @@ export default function Reports() {
                 }
             });
 
-            // Calculate totals from daily summaries for now (or we could calculate from raw data)
+            // Calculate totals from daily summaries (Correct accounting formula)
             const sales = dailyData.reduce((sum, s: any) => sum + (s.salesTotal || 0), 0);
+            const purchases = dailyData.reduce((sum, s: any) => sum + (s.purchasesTotal || 0), 0);
             const expenses = dailyData.reduce((sum, s: any) => sum + (s.expensesTotal || 0), 0);
-            const profits = dailyData.reduce((sum, s: any) => sum + (s.profitsTotal || 0), 0);
+            
+            // Correct calculation: Gross Profit = Sales - Purchases, then Net Profit = Gross Profit - Expenses
+            const grossProfit = sales - purchases;
+            const netProfit = grossProfit - expenses;
 
             setLiveStats({
                 totalCash: totalBalance,
                 totalSales: sales,
                 totalExpenses: expenses,
-                netProfit: profits - expenses
+                netProfit: netProfit
             });
 
         } catch (e) {
@@ -208,12 +211,12 @@ export default function Reports() {
 
     const timelineData = getTimelineData();
 
-    // Summing current summaries
+    // Summing current summaries (Correct accounting formula)
     const salesInYer = dailySummaries.reduce((sum, s) => sum + (s.salesTotal || 0), 0);
     const purchasesInYer = dailySummaries.reduce((sum, s) => sum + (s.purchasesTotal || 0), 0);
     const expensesInYer = dailySummaries.reduce((sum, s) => sum + (s.expensesTotal || 0), 0);
-    const profitsInYer = dailySummaries.reduce((sum, s) => sum + (s.profitsTotal || 0), 0);
-    const netProfitInYer = profitsInYer - expensesInYer;
+    const grossProfitInYer = salesInYer - purchasesInYer;
+    const netProfitInYer = grossProfitInYer - expensesInYer;
 
     if (isLoading) {
         return <div className="text-center mt-10">جاري تحميل التقارير...</div>;
@@ -388,7 +391,7 @@ export default function Reports() {
                     )}
 
                     {activeTab === 'performance' && (
-                        <PerformanceAnalysis 
+                        <PerformanceAnalysisReport 
                             invoices={invoices}
                             expenses={expenses}
                         />
