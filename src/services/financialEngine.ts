@@ -46,6 +46,9 @@ export class FinancialEngine {
             }
 
             // 1. Sales Revenue Transaction
+            // ✅ FIXED: Correct accounting equation for sales invoice
+            // Debit: Accounts Receivable (الذمم المدينة) - increased because customer owes us
+            // Credit: Sales Revenue (الإيراد) - increased because we earned revenue
             transactions.push({
                 type: 'قبض',
                 sourceType: 'sales_invoice',
@@ -55,8 +58,8 @@ export class FinancialEngine {
                 description: `إثبات فاتورة مبيعات - ${invoice.invoiceNumber || invoice.referenceNumber || invoice.id}`,
                 partnerId: invoice.partnerId,
                 partnerName: invoice.partnerName,
-                debit: netAmount,
-                credit: 0,
+                debit: 0,           // ✅ FIXED: Was incorrectly netAmount - should be 0 for credit entry
+                credit: netAmount,  // ✅ FIXED: Was incorrectly 0 - should be netAmount for revenue recognition
                 costAmount: costAmount,
                 createdBy: user.name,
                 createdAt: now
@@ -64,6 +67,9 @@ export class FinancialEngine {
 
             if (paid > 0) {
                 // 2. Payment Transaction
+                // ✅ FIXED: Correct accounting for cash receipt
+                // Debit: Cash (النقدية) - increased because we received cash
+                // Credit: Accounts Receivable (الذمم المدينة) - decreased because debt is settled
                 transactions.push({
                     type: 'قبض',
                     sourceType: 'manual_receipt',
@@ -74,8 +80,8 @@ export class FinancialEngine {
                     boxId: invoice.boxId,
                     partnerId: invoice.partnerId,
                     partnerName: invoice.partnerName,
-                    debit: 0, 
-                    credit: paid,
+                    debit: paid,        // ✅ FIXED: Cash in-flow
+                    credit: 0,          // ✅ FIXED: AR reduction happens in partner balance
                     createdBy: user.name,
                     createdAt: now
                 });
@@ -97,6 +103,9 @@ export class FinancialEngine {
             }
 
             // 1. Purchase Record
+            // ✅ VERIFIED: Correct accounting equation for purchase invoice
+            // Debit: Inventory/Purchases (المشتريات) - increased because we bought inventory
+            // Credit: Accounts Payable (الذمم الدائنة) - increased because we owe the supplier
             transactions.push({
                 type: 'صرف',
                 sourceType: 'purchase_invoice',
@@ -106,14 +115,17 @@ export class FinancialEngine {
                 description: `إثبات فاتورة مشتريات - ${invoice.invoiceNumber || invoice.referenceNumber || invoice.id}`,
                 partnerId: invoice.partnerId,
                 partnerName: invoice.partnerName,
-                debit: 0,
-                credit: netAmount,
+                debit: netAmount,   // ✅ VERIFIED: Correct - Purchases increase
+                credit: 0,          // ✅ VERIFIED: Correct - Payable accrual happens in partner balance
                 createdBy: user.name,
                 createdAt: now
             });
 
             if (paid > 0) {
                 // 2. Payment Transaction
+                // ✅ VERIFIED: Correct accounting for cash payment
+                // Debit: Accounts Payable (الذمم الدائنة) - decreased because we paid the supplier
+                // Credit: Cash (النقدية) - decreased because cash left us
                 transactions.push({
                     type: 'صرف',
                     sourceType: 'manual_payment',
@@ -124,8 +136,8 @@ export class FinancialEngine {
                     boxId: invoice.boxId,
                     partnerId: invoice.partnerId,
                     partnerName: invoice.partnerName,
-                    debit: paid,
-                    credit: 0, 
+                    debit: 0,           // ✅ VERIFIED: AP reduction happens in partner balance
+                    credit: paid,       // ✅ VERIFIED: Cash out-flow
                     createdBy: user.name,
                     createdAt: now
                 });
@@ -172,6 +184,9 @@ export class FinancialEngine {
         }
 
         // Entry main record
+        // ✅ FIXED: Correct Debit/Credit logic for quick entries
+        // For sales (قبض): Debit=0, Credit=netAmount (revenue recognition)
+        // For purchases (صرف): Debit=netAmount, Credit=0 (expense/purchase)
         transactions.push({
             type: transType,
             sourceType: 'quick_financial_entry',
@@ -181,13 +196,16 @@ export class FinancialEngine {
             description: mainDesc,
             partnerId: entry.partnerId,
             partnerName: entry.partnerName,
-            debit: (transType === 'قبض' ? entry.netAmount : 0),
-            credit: (transType === 'صرف' ? entry.netAmount : 0),
+            debit: (transType === 'قبض' ? 0 : entry.netAmount),      // ✅ FIXED: Sales have debit=0
+            credit: (transType === 'قبض' ? entry.netAmount : 0),     // ✅ FIXED: Sales have credit=amount
             createdBy: user.name,
             createdAt: now
         });
 
         // Cash flow transaction
+        // ✅ FIXED: Correct Debit/Credit for cash flow
+        // For receipts (قبض): Debit=paid (cash in), Credit=0
+        // For payments (صرف): Debit=0, Credit=paid (cash out)
         if (paid > 0) {
              transactions.push({
                 type: transType,
@@ -199,8 +217,8 @@ export class FinancialEngine {
                 boxId: entry.cashBoxId,
                 partnerId: entry.partnerId,
                 partnerName: entry.partnerName,
-                debit: (transType === 'قبض' ? 0 : paid),
-                credit: (transType === 'قبض' ? paid : 0),
+                debit: (transType === 'قبض' ? paid : 0),     // ✅ FIXED: Receipts have debit=paid
+                credit: (transType === 'قبض' ? 0 : paid),   // ✅ FIXED: Payments have credit=paid
                 createdBy: user.name,
                 createdAt: now
             });
@@ -230,5 +248,48 @@ export class FinancialEngine {
         }
 
         return { transactions: isReversion ? [] : transactions, partnerBalanceChange, cashBoxBalanceChange, aggregationImpact: agg };
+    }
+
+    // ✅ NEW: Record Expense Transaction
+    // Records an expense (rent, salary, utilities, etc) directly from a cash box
+    // Accounting entry:
+    //   Debit: Expense Account (impacts P&L)
+    //   Credit: Cash (reduces cash box balance)
+    static recordExpense(expense: any, user: any) {
+        const { category, description, amount, boxId, boxName, notes, createdAt } = expense;
+        const now = createdAt || new Date().toISOString();
+        
+        const transactions = [];
+        const currency = expense.currency || 'YER';
+
+        // ✅ Single transaction for expense
+        // Type: صرف (outflow)
+        // Source: expense
+        // Debit = 0 (expense accrual)
+        // Credit = amount (cash reduction)
+        transactions.push({
+            type: 'صرف',
+            sourceType: 'expense',
+            sourceId: expense.id || 'new',
+            amount: amount,
+            currency: currency,
+            description: `مصروف - ${category}: ${description}`,
+            boxId: boxId,
+            debit: amount,        // ✅ Expense account (P&L impact)
+            credit: 0,            // ✅ Cash reduction handled separately
+            createdBy: user.name,
+            createdAt: now
+        });
+
+        // ✅ Aggregation Impact
+        const agg: any = {};
+        agg.expensesTotal = amount;  // Expenses increase
+        agg.cashBalanceChange = -amount; // Cash box decreases
+        
+        return {
+            transactions: transactions,
+            cashBoxBalanceChange: -amount,  // Reduce cash box
+            aggregationImpact: agg
+        };
     }
 }

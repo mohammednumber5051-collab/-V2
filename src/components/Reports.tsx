@@ -7,15 +7,18 @@ import {
     DollarSign,
     Briefcase,
     FileSpreadsheet,
-    FileText
+    FileText,
+    BarChart3,
+    Activity
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { dbService } from "../services/db";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
-import { calculateUnifiedCashBalances } from "../lib/financialUtils";
+import { calculateUnifiedCashBalances, calculateTotalRevenue, calculateCOGS, calculateNetIncome, calculateOperatingExpenses, generateIncomeStatement, generatePerformanceAnalysis } from "../lib/financialUtils";
 import { CashBox, Transaction, Invoice, Voucher, QuickFinancialEntry } from "../types";
 import PrintPreviewModal from "./PrintPreviewModal";
+import PerformanceAnalysisReport from "./PerformanceAnalysisReport";
 
 export default function Reports() {
     const [dailySummaries, setDailySummaries] = useState<any[]>([]);
@@ -24,7 +27,9 @@ export default function Reports() {
     const [liveStats, setLiveStats] = useState({ totalCash: 0, totalSales: 0, totalExpenses: 0, netProfit: 0 });
 
     const [timeRange, setTimeRange] = useState<'today' | 'week' | 'month' | 'year'>("month");
-    const [activeTab, setActiveTab] = useState<"executive" | "sales" | "profit">("executive");
+    const [activeTab, setActiveTab] = useState<"executive" | "sales" | "profit" | "income-statement" | "performance">("executive");
+    const [invoices, setInvoices] = useState<any[]>([]);
+    const [expenses, setExpenses] = useState<any[]>([]);
     const [printPreview, setPrintPreview] = useState<{
         isOpen: boolean;
         html: string;
@@ -160,6 +165,8 @@ export default function Reports() {
             
             setDailySummaries(dailyData as any[]);
             setMonthlySummaries(monthlyData as any[]);
+            setInvoices((invoices as Invoice[]).filter(i => i.recordStatus !== 'deleted'));
+            setExpenses((vouchers as Voucher[]).filter(v => v.recordStatus !== 'deleted'));
 
             // Calculate Live Stats
             let totalBalance = 0;
@@ -169,16 +176,20 @@ export default function Reports() {
                 }
             });
 
-            // Calculate totals from daily summaries for now (or we could calculate from raw data)
+            // Calculate totals from daily summaries (Correct accounting formula)
             const sales = dailyData.reduce((sum, s: any) => sum + (s.salesTotal || 0), 0);
+            const purchases = dailyData.reduce((sum, s: any) => sum + (s.purchasesTotal || 0), 0);
             const expenses = dailyData.reduce((sum, s: any) => sum + (s.expensesTotal || 0), 0);
-            const profits = dailyData.reduce((sum, s: any) => sum + (s.profitsTotal || 0), 0);
+            
+            // Correct calculation: Gross Profit = Sales - Purchases, then Net Profit = Gross Profit - Expenses
+            const grossProfit = sales - purchases;
+            const netProfit = grossProfit - expenses;
 
             setLiveStats({
                 totalCash: totalBalance,
                 totalSales: sales,
                 totalExpenses: expenses,
-                netProfit: profits - expenses
+                netProfit: netProfit
             });
 
         } catch (e) {
@@ -200,12 +211,12 @@ export default function Reports() {
 
     const timelineData = getTimelineData();
 
-    // Summing current summaries
+    // Summing current summaries (Correct accounting formula)
     const salesInYer = dailySummaries.reduce((sum, s) => sum + (s.salesTotal || 0), 0);
     const purchasesInYer = dailySummaries.reduce((sum, s) => sum + (s.purchasesTotal || 0), 0);
     const expensesInYer = dailySummaries.reduce((sum, s) => sum + (s.expensesTotal || 0), 0);
-    const profitsInYer = dailySummaries.reduce((sum, s) => sum + (s.profitsTotal || 0), 0);
-    const netProfitInYer = profitsInYer - expensesInYer;
+    const grossProfitInYer = salesInYer - purchasesInYer;
+    const netProfitInYer = grossProfitInYer - expensesInYer;
 
     if (isLoading) {
         return <div className="text-center mt-10">جاري تحميل التقارير...</div>;
@@ -245,6 +256,8 @@ export default function Reports() {
                     { id: 'executive', title: 'الملخص التنفيذي', icon: Briefcase },
                     { id: 'sales', title: 'المبيعات والإيرادات', icon: TrendingUp },
                     { id: 'profit', title: 'الأرباح التشغيلية', icon: Wallet },
+                    { id: 'income-statement', title: 'قائمة الدخل', icon: BarChart3 },
+                    { id: 'performance', title: 'تحليل الأداء', icon: Activity },
                 ].map((item) => {
                     const isActive = activeTab === item.id;
                     return (
@@ -368,6 +381,20 @@ export default function Reports() {
                                 </p>
                             </div>
                         </div>
+                    )}
+
+                    {activeTab === 'income-statement' && (
+                        <IncomeStatementReport 
+                            invoices={invoices}
+                            expenses={expenses}
+                        />
+                    )}
+
+                    {activeTab === 'performance' && (
+                        <PerformanceAnalysisReport 
+                            invoices={invoices}
+                            expenses={expenses}
+                        />
                     )}
                 </motion.div>
             </AnimatePresence>
