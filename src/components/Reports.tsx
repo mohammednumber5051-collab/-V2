@@ -7,15 +7,19 @@ import {
     DollarSign,
     Briefcase,
     FileSpreadsheet,
-    FileText
+    FileText,
+    BarChart3,
+    Activity
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { dbService } from "../services/db";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
-import { calculateUnifiedCashBalances } from "../lib/financialUtils";
+import { calculateUnifiedCashBalances, calculateTotalRevenue, calculateCOGS, calculateNetIncome, calculateOperatingExpenses, generateIncomeStatement, generatePerformanceAnalysis } from "../lib/financialUtils";
 import { CashBox, Transaction, Invoice, Voucher, QuickFinancialEntry } from "../types";
 import PrintPreviewModal from "./PrintPreviewModal";
+import IncomeStatementReport from "./IncomeStatementReport";
+import PerformanceAnalysis from "./PerformanceAnalysis";
 
 export default function Reports() {
     const [dailySummaries, setDailySummaries] = useState<any[]>([]);
@@ -24,7 +28,9 @@ export default function Reports() {
     const [liveStats, setLiveStats] = useState({ totalCash: 0, totalSales: 0, totalExpenses: 0, netProfit: 0 });
 
     const [timeRange, setTimeRange] = useState<'today' | 'week' | 'month' | 'year'>("month");
-    const [activeTab, setActiveTab] = useState<"executive" | "sales" | "profit">("executive");
+    const [activeTab, setActiveTab] = useState<"executive" | "sales" | "profit" | "income-statement" | "performance">("executive");
+    const [invoices, setInvoices] = useState<any[]>([]);
+    const [expenses, setExpenses] = useState<any[]>([]);
     const [printPreview, setPrintPreview] = useState<{
         isOpen: boolean;
         html: string;
@@ -160,6 +166,8 @@ export default function Reports() {
             
             setDailySummaries(dailyData as any[]);
             setMonthlySummaries(monthlyData as any[]);
+            setInvoices((invoices as Invoice[]).filter(i => i.recordStatus !== 'deleted'));
+            setExpenses((vouchers as Voucher[]).filter(v => v.recordStatus !== 'deleted'));
 
             // Calculate Live Stats
             let totalBalance = 0;
@@ -245,6 +253,8 @@ export default function Reports() {
                     { id: 'executive', title: 'الملخص التنفيذي', icon: Briefcase },
                     { id: 'sales', title: 'المبيعات والإيرادات', icon: TrendingUp },
                     { id: 'profit', title: 'الأرباح التشغيلية', icon: Wallet },
+                    { id: 'income-statement', title: 'قائمة الدخل', icon: BarChart3 },
+                    { id: 'performance', title: 'تحليل الأداء', icon: Activity },
                 ].map((item) => {
                     const isActive = activeTab === item.id;
                     return (
@@ -368,6 +378,20 @@ export default function Reports() {
                                 </p>
                             </div>
                         </div>
+                    )}
+
+                    {activeTab === 'income-statement' && (
+                        <IncomeStatementReport 
+                            invoices={invoices}
+                            expenses={expenses}
+                        />
+                    )}
+
+                    {activeTab === 'performance' && (
+                        <PerformanceAnalysis 
+                            invoices={invoices}
+                            expenses={expenses}
+                        />
                     )}
                 </motion.div>
             </AnimatePresence>
