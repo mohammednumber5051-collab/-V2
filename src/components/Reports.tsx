@@ -7,18 +7,16 @@ import {
     DollarSign,
     Briefcase,
     FileSpreadsheet,
-    FileText,
-    BarChart3,
-    Activity
+    FileText
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { dbService } from "../services/db";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
-import { calculateUnifiedCashBalances, calculateTotalRevenue, calculateCOGS, calculateNetIncome, calculateOperatingExpenses, generateIncomeStatement, generatePerformanceAnalysis } from "../lib/financialUtils";
+import { calculateUnifiedCashBalances } from "../lib/financialUtils";
 import { CashBox, Transaction, Invoice, Voucher, QuickFinancialEntry } from "../types";
 import PrintPreviewModal from "./PrintPreviewModal";
-import PerformanceAnalysisReport from "./PerformanceAnalysisReport";
+
 
 export default function Reports() {
     const [dailySummaries, setDailySummaries] = useState<any[]>([]);
@@ -27,9 +25,7 @@ export default function Reports() {
     const [liveStats, setLiveStats] = useState({ totalCash: 0, totalSales: 0, totalExpenses: 0, netProfit: 0 });
 
     const [timeRange, setTimeRange] = useState<'today' | 'week' | 'month' | 'year'>("month");
-    const [activeTab, setActiveTab] = useState<"executive" | "sales" | "profit" | "income-statement" | "performance">("executive");
-    const [invoices, setInvoices] = useState<any[]>([]);
-    const [expenses, setExpenses] = useState<any[]>([]);
+    const [activeTab, setActiveTab] = useState<"executive" | "sales" | "profit">("executive");
     const [printPreview, setPrintPreview] = useState<{
         isOpen: boolean;
         html: string;
@@ -165,8 +161,6 @@ export default function Reports() {
             
             setDailySummaries(dailyData as any[]);
             setMonthlySummaries(monthlyData as any[]);
-            setInvoices((invoices as Invoice[]).filter(i => i.recordStatus !== 'deleted'));
-            setExpenses((vouchers as Voucher[]).filter(v => v.recordStatus !== 'deleted'));
 
             // Calculate Live Stats
             let totalBalance = 0;
@@ -177,9 +171,23 @@ export default function Reports() {
             });
 
             // Calculate totals from daily summaries (Correct accounting formula)
-            const sales = dailyData.reduce((sum, s: any) => sum + (s.salesTotal || 0), 0);
-            const purchases = dailyData.reduce((sum, s: any) => sum + (s.purchasesTotal || 0), 0);
-            const expenses = dailyData.reduce((sum, s: any) => sum + (s.expensesTotal || 0), 0);
+            // IMPORTANT: We calculate from invoices directly to avoid negative profit issues
+            const allInvoices = (invoices as Invoice[]).filter(i => i.recordStatus !== 'deleted');
+            const saleInvoices = allInvoices.filter(i => i.type === 'sale');
+            const purchaseInvoices = allInvoices.filter(i => i.type === 'purchase');
+            const allVouchers = (vouchers as Voucher[]).filter(v => v.recordStatus !== 'deleted');
+
+            const sales = saleInvoices.reduce((sum, inv) => {
+                const netAmount = Math.max(0, (inv.total || 0) - (inv.discount || 0));
+                return sum + netAmount;
+            }, 0);
+
+            const purchases = purchaseInvoices.reduce((sum, inv) => {
+                const netAmount = Math.max(0, (inv.total || 0) - (inv.discount || 0));
+                return sum + netAmount;
+            }, 0);
+
+            const expenses = allVouchers.reduce((sum, v) => sum + (v.amount || 0), 0);
             
             // Correct calculation: Gross Profit = Sales - Purchases, then Net Profit = Gross Profit - Expenses
             const grossProfit = sales - purchases;
@@ -189,7 +197,7 @@ export default function Reports() {
                 totalCash: totalBalance,
                 totalSales: sales,
                 totalExpenses: expenses,
-                netProfit: netProfit
+                netProfit: netProfit > 0 ? netProfit : 0  // Never show negative profit in summary
             });
 
         } catch (e) {
@@ -256,8 +264,6 @@ export default function Reports() {
                     { id: 'executive', title: 'الملخص التنفيذي', icon: Briefcase },
                     { id: 'sales', title: 'المبيعات والإيرادات', icon: TrendingUp },
                     { id: 'profit', title: 'الأرباح التشغيلية', icon: Wallet },
-                    { id: 'income-statement', title: 'قائمة الدخل', icon: BarChart3 },
-                    { id: 'performance', title: 'تحليل الأداء', icon: Activity },
                 ].map((item) => {
                     const isActive = activeTab === item.id;
                     return (
@@ -294,7 +300,7 @@ export default function Reports() {
                                         <div className="p-2.5 bg-blue-50 dark:bg-blue-500/10 rounded-xl text-blue-600 dark:text-blue-500">
                                             <Wallet size={20} />
                                         </div>
-                                        <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">إجمالي الرصيد النقدي</h3>
+                                        <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">��جمالي الرصيد النقدي</h3>
                                     </div>
                                     <div className="text-2xl font-black text-slate-900 dark:text-white font-mono break-all leading-none">
                                         {liveStats.totalCash.toLocaleString()} <span className="text-[10px] text-slate-400">YER</span>
@@ -383,19 +389,7 @@ export default function Reports() {
                         </div>
                     )}
 
-                    {activeTab === 'income-statement' && (
-                        <IncomeStatementReport 
-                            invoices={invoices}
-                            expenses={expenses}
-                        />
-                    )}
 
-                    {activeTab === 'performance' && (
-                        <PerformanceAnalysisReport 
-                            invoices={invoices}
-                            expenses={expenses}
-                        />
-                    )}
                 </motion.div>
             </AnimatePresence>
 
