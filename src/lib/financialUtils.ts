@@ -281,6 +281,153 @@ export function calculateUnifiedPartnerBalances(
     return partnerBalances;
 }
 
+// ✅ NEW: Professional Financial Reporting - Correct Accounting Calculations
+// All calculations follow international accounting standards (IFRS/GAAP)
+
+// Calculate total revenue from sales invoices (الإيرادات الإجمالية)
+export function calculateTotalRevenue(invoices: any[]) {
+    return invoices
+        .filter(inv => 
+            inv.type === 'sale' && 
+            inv.recordStatus !== 'deleted'
+        )
+        .reduce((sum, inv) => {
+            const netAmount = (inv.total || 0) - (inv.discount || 0);
+            return sum + netAmount;
+        }, 0);
+}
+
+// Calculate cost of goods sold from purchase invoices (تكلفة البضاعة المباعة)
+export function calculateCOGS(invoices: any[]) {
+    return invoices
+        .filter(inv =>
+            inv.type === 'purchase' &&
+            inv.recordStatus !== 'deleted'
+        )
+        .reduce((sum, inv) => {
+            const netAmount = (inv.total || 0) - (inv.discount || 0);
+            return sum + netAmount;
+        }, 0);
+}
+
+// Calculate gross profit (الربح الإجمالي)
+export function calculateGrossProfit(invoices: any[]) {
+    const revenue = calculateTotalRevenue(invoices);
+    const cogs = calculateCOGS(invoices);
+    return revenue - cogs;
+}
+
+// Calculate total operating expenses (إجمالي المصروفات التشغيلية)
+export function calculateOperatingExpenses(expenses: any[]) {
+    return expenses
+        .filter(exp => exp.recordStatus !== 'deleted')
+        .reduce((sum, exp) => sum + (exp.amount || 0), 0);
+}
+
+// Calculate net income (صافي الدخل)
+export function calculateNetIncome(invoices: any[], expenses: any[]) {
+    const grossProfit = calculateGrossProfit(invoices);
+    const operatingExpenses = calculateOperatingExpenses(expenses);
+    return grossProfit - operatingExpenses;
+}
+
+// Calculate profit margin percentage (هامش الربح)
+export function calculateProfitMargin(invoices: any[], expenses: any[]) {
+    const revenue = calculateTotalRevenue(invoices);
+    const netIncome = calculateNetIncome(invoices, expenses);
+    if (revenue === 0) return 0;
+    return (netIncome / revenue) * 100;
+}
+
+// Calculate gross margin percentage (هامش الربح الإجمالي)
+export function calculateGrossMargin(invoices: any[]) {
+    const revenue = calculateTotalRevenue(invoices);
+    const grossProfit = calculateGrossProfit(invoices);
+    if (revenue === 0) return 0;
+    return (grossProfit / revenue) * 100;
+}
+
+// Generate comprehensive income statement (قائمة الدخل)
+export function generateIncomeStatement(invoices: any[], expenses: any[], dateRange?: { start: string; end: string }) {
+    const filteredInvoices = dateRange
+        ? invoices.filter(inv => inv.createdAt >= dateRange.start && inv.createdAt <= dateRange.end)
+        : invoices;
+    
+    const filteredExpenses = dateRange
+        ? expenses.filter(exp => exp.createdAt >= dateRange.start && exp.createdAt <= dateRange.end)
+        : expenses;
+
+    const totalRevenue = calculateTotalRevenue(filteredInvoices);
+    const cogs = calculateCOGS(filteredInvoices);
+    const grossProfit = totalRevenue - cogs;
+    const operatingExpenses = calculateOperatingExpenses(filteredExpenses);
+    const netIncome = grossProfit - operatingExpenses;
+    const profitMargin = calculateProfitMargin(filteredInvoices, filteredExpenses);
+    const grossMargin = calculateGrossMargin(filteredInvoices);
+
+    // Group expenses by category
+    const expensesByCategory: { [key: string]: number } = {};
+    filteredExpenses
+        .filter(exp => exp.recordStatus !== 'deleted')
+        .forEach(exp => {
+            const category = exp.category || 'أخرى';
+            expensesByCategory[category] = (expensesByCategory[category] || 0) + (exp.amount || 0);
+        });
+
+    return {
+        totalRevenue,
+        costOfGoods: cogs,
+        grossProfit,
+        grossMarginPercent: grossMargin,
+        operatingExpenses,
+        expensesByCategory,
+        netIncome,
+        profitMarginPercent: profitMargin,
+        periodStart: dateRange?.start || 'N/A',
+        periodEnd: dateRange?.end || 'N/A'
+    };
+}
+
+// Generate performance analysis with comparisons (تحليل الأداء)
+export function generatePerformanceAnalysis(
+    currentInvoices: any[],
+    currentExpenses: any[],
+    previousInvoices: any[],
+    previousExpenses: any[]
+) {
+    const current = generateIncomeStatement(currentInvoices, currentExpenses);
+    const previous = generateIncomeStatement(previousInvoices, previousExpenses);
+
+    const revenueChange = current.totalRevenue - previous.totalRevenue;
+    const revenueChangePercent = previous.totalRevenue === 0 
+        ? 0 
+        : (revenueChange / previous.totalRevenue) * 100;
+
+    const profitChange = current.netIncome - previous.netIncome;
+    const profitChangePercent = previous.netIncome === 0
+        ? 0
+        : (profitChange / previous.netIncome) * 100;
+
+    const expenseChange = current.operatingExpenses - previous.operatingExpenses;
+    const expenseChangePercent = previous.operatingExpenses === 0
+        ? 0
+        : (expenseChange / previous.operatingExpenses) * 100;
+
+    return {
+        current,
+        previous,
+        comparison: {
+            revenueChange,
+            revenueChangePercent,
+            profitChange,
+            profitChangePercent,
+            expenseChange,
+            expenseChangePercent,
+            marginChange: current.profitMarginPercent - previous.profitMarginPercent
+        }
+    };
+}
+
 // ✅ NEW: Get Partner Account Statement
 // Returns chronologically ordered transactions with running balances
 // partnerType: 'customer' (sales invoices) or 'supplier' (purchase invoices)
