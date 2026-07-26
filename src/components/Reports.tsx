@@ -171,33 +171,19 @@ export default function Reports() {
             });
 
             // Calculate totals from daily summaries (Correct accounting formula)
-            // IMPORTANT: We calculate from invoices directly to avoid negative profit issues
-            const allInvoices = (invoices as Invoice[]).filter(i => i.recordStatus !== 'deleted');
-            const saleInvoices = allInvoices.filter(i => i.type === 'sale');
-            const purchaseInvoices = allInvoices.filter(i => i.type === 'purchase');
-            const allVouchers = (vouchers as Voucher[]).filter(v => v.recordStatus !== 'deleted');
-
-            const sales = saleInvoices.reduce((sum, inv) => {
-                const netAmount = Math.max(0, (inv.total || 0) - (inv.discount || 0));
-                return sum + netAmount;
-            }, 0);
-
-            const purchases = purchaseInvoices.reduce((sum, inv) => {
-                const netAmount = Math.max(0, (inv.total || 0) - (inv.discount || 0));
-                return sum + netAmount;
-            }, 0);
-
-            const expenses = allVouchers.reduce((sum, v) => sum + (v.amount || 0), 0);
+            const totalSales = Math.max(0, (dailyData as any[]).reduce((sum, d) => sum + Math.max(0, d.salesTotal || 0), 0));
+            const totalPurchases = Math.max(0, (dailyData as any[]).reduce((sum, d) => sum + Math.max(0, d.purchasesTotal || 0), 0));
+            const totalExpenses = Math.max(0, (dailyData as any[]).reduce((sum, d) => sum + Math.max(0, d.expensesTotal || 0), 0));
             
             // Correct calculation: Gross Profit = Sales - Purchases, then Net Profit = Gross Profit - Expenses
-            const grossProfit = sales - purchases;
-            const netProfit = grossProfit - expenses;
+            const grossProfit = Math.max(0, totalSales - totalPurchases);
+            const netProfit = Math.max(0, grossProfit - totalExpenses);
 
             setLiveStats({
                 totalCash: totalBalance,
-                totalSales: sales,
-                totalExpenses: expenses,
-                netProfit: netProfit > 0 ? netProfit : 0  // Never show negative profit in summary
+                totalSales: totalSales,
+                totalExpenses: totalExpenses,
+                netProfit: netProfit
             });
 
         } catch (e) {
@@ -220,11 +206,11 @@ export default function Reports() {
     const timelineData = getTimelineData();
 
     // Summing current summaries (Correct accounting formula)
-    const salesInYer = dailySummaries.reduce((sum, s) => sum + (s.salesTotal || 0), 0);
-    const purchasesInYer = dailySummaries.reduce((sum, s) => sum + (s.purchasesTotal || 0), 0);
-    const expensesInYer = dailySummaries.reduce((sum, s) => sum + (s.expensesTotal || 0), 0);
-    const grossProfitInYer = salesInYer - purchasesInYer;
-    const netProfitInYer = grossProfitInYer - expensesInYer;
+    const salesInYer = Math.max(0, dailySummaries.reduce((sum, s) => sum + Math.max(0, s.salesTotal || 0), 0));
+    const purchasesInYer = Math.max(0, dailySummaries.reduce((sum, s) => sum + Math.max(0, s.purchasesTotal || 0), 0));
+    const expensesInYer = Math.max(0, dailySummaries.reduce((sum, s) => sum + Math.max(0, s.expensesTotal || 0), 0));
+    const grossProfitInYer = Math.max(0, salesInYer - purchasesInYer);
+    const netProfitInYer = Math.max(0, grossProfitInYer - expensesInYer);
 
     if (isLoading) {
         return <div className="text-center mt-10">جاري تحميل التقارير...</div>;
@@ -300,7 +286,7 @@ export default function Reports() {
                                         <div className="p-2.5 bg-blue-50 dark:bg-blue-500/10 rounded-xl text-blue-600 dark:text-blue-500">
                                             <Wallet size={20} />
                                         </div>
-                                        <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">��جمالي الرصيد النقدي</h3>
+                                        <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">��جمالي ا��رصيد النقدي</h3>
                                     </div>
                                     <div className="text-2xl font-black text-slate-900 dark:text-white font-mono break-all leading-none">
                                         {liveStats.totalCash.toLocaleString()} <span className="text-[10px] text-slate-400">YER</span>
