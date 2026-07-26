@@ -111,12 +111,13 @@ export const authService = {
                     balance: 0,
                     initialBalance: 0,
                     currency: "YER",
+                    userId: "",
+                    userName: "نظام",
                     recordStatus: 'active',
                     isActive: true,
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString()
+                    createdAt: new Date().toISOString()
                 };
-                await dbService.add("cashBoxes", newMainBox, true, "إنشاء الصندوق الرئيسي عند تهيئة النظام");
+                await dbService.add("cashBoxes", newMainBox);
                 console.log("[AuthService] Seeded default cash box successfully.");
             } else if (mainBox.recordStatus === 'deleted' || mainBox.isActive === false || mainBox.isActive === undefined) {
                 console.log("[AuthService] Ensuring main box is active and valid...");

@@ -179,13 +179,14 @@ export default function Transactions({ currentUser: propCurrentUser, onNavigate 
         balance: 0,
         initialBalance: 0,
         currency: "YER",
+        userId: "",
+        userName: "نظام",
         recordStatus: 'active',
         isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        createdAt: new Date().toISOString()
       };
       try {
-        await dbService.add("cashBoxes", newMainBox, true, "إنشاء الصندوق الرئيسي تلقائياً");
+        await dbService.add("cashBoxes", newMainBox);
       } catch (e) {
         console.warn("Failed to seed main box in DB", e);
       }
