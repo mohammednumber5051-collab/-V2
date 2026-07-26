@@ -7,18 +7,16 @@ import {
     DollarSign,
     Briefcase,
     FileSpreadsheet,
-    FileText,
-    BarChart3,
-    Activity
+    FileText
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { dbService } from "../services/db";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/utils";
-import { calculateUnifiedCashBalances, calculateTotalRevenue, calculateCOGS, calculateNetIncome, calculateOperatingExpenses, generateIncomeStatement, generatePerformanceAnalysis } from "../lib/financialUtils";
+import { calculateUnifiedCashBalances } from "../lib/financialUtils";
 import { CashBox, Transaction, Invoice, Voucher, QuickFinancialEntry } from "../types";
 import PrintPreviewModal from "./PrintPreviewModal";
-import PerformanceAnalysisReport from "./PerformanceAnalysisReport";
+
 
 export default function Reports() {
     const [dailySummaries, setDailySummaries] = useState<any[]>([]);
@@ -27,9 +25,7 @@ export default function Reports() {
     const [liveStats, setLiveStats] = useState({ totalCash: 0, totalSales: 0, totalExpenses: 0, netProfit: 0 });
 
     const [timeRange, setTimeRange] = useState<'today' | 'week' | 'month' | 'year'>("month");
-    const [activeTab, setActiveTab] = useState<"executive" | "sales" | "profit" | "income-statement" | "performance">("executive");
-    const [invoices, setInvoices] = useState<any[]>([]);
-    const [expenses, setExpenses] = useState<any[]>([]);
+    const [activeTab, setActiveTab] = useState<"executive" | "sales" | "profit">("executive");
     const [printPreview, setPrintPreview] = useState<{
         isOpen: boolean;
         html: string;
@@ -165,8 +161,6 @@ export default function Reports() {
             
             setDailySummaries(dailyData as any[]);
             setMonthlySummaries(monthlyData as any[]);
-            setInvoices((invoices as Invoice[]).filter(i => i.recordStatus !== 'deleted'));
-            setExpenses((vouchers as Voucher[]).filter(v => v.recordStatus !== 'deleted'));
 
             // Calculate Live Stats
             let totalBalance = 0;
@@ -177,18 +171,18 @@ export default function Reports() {
             });
 
             // Calculate totals from daily summaries (Correct accounting formula)
-            const sales = dailyData.reduce((sum, s: any) => sum + (s.salesTotal || 0), 0);
-            const purchases = dailyData.reduce((sum, s: any) => sum + (s.purchasesTotal || 0), 0);
-            const expenses = dailyData.reduce((sum, s: any) => sum + (s.expensesTotal || 0), 0);
+            const totalSales = Math.max(0, (dailyData as any[]).reduce((sum, d) => sum + Math.max(0, d.salesTotal || 0), 0));
+            const totalPurchases = Math.max(0, (dailyData as any[]).reduce((sum, d) => sum + Math.max(0, d.purchasesTotal || 0), 0));
+            const totalExpenses = Math.max(0, (dailyData as any[]).reduce((sum, d) => sum + Math.max(0, d.expensesTotal || 0), 0));
             
             // Correct calculation: Gross Profit = Sales - Purchases, then Net Profit = Gross Profit - Expenses
-            const grossProfit = sales - purchases;
-            const netProfit = grossProfit - expenses;
+            const grossProfit = Math.max(0, totalSales - totalPurchases);
+            const netProfit = Math.max(0, grossProfit - totalExpenses);
 
             setLiveStats({
                 totalCash: totalBalance,
-                totalSales: sales,
-                totalExpenses: expenses,
+                totalSales: totalSales,
+                totalExpenses: totalExpenses,
                 netProfit: netProfit
             });
 
@@ -212,11 +206,11 @@ export default function Reports() {
     const timelineData = getTimelineData();
 
     // Summing current summaries (Correct accounting formula)
-    const salesInYer = dailySummaries.reduce((sum, s) => sum + (s.salesTotal || 0), 0);
-    const purchasesInYer = dailySummaries.reduce((sum, s) => sum + (s.purchasesTotal || 0), 0);
-    const expensesInYer = dailySummaries.reduce((sum, s) => sum + (s.expensesTotal || 0), 0);
-    const grossProfitInYer = salesInYer - purchasesInYer;
-    const netProfitInYer = grossProfitInYer - expensesInYer;
+    const salesInYer = Math.max(0, dailySummaries.reduce((sum, s) => sum + Math.max(0, s.salesTotal || 0), 0));
+    const purchasesInYer = Math.max(0, dailySummaries.reduce((sum, s) => sum + Math.max(0, s.purchasesTotal || 0), 0));
+    const expensesInYer = Math.max(0, dailySummaries.reduce((sum, s) => sum + Math.max(0, s.expensesTotal || 0), 0));
+    const grossProfitInYer = Math.max(0, salesInYer - purchasesInYer);
+    const netProfitInYer = Math.max(0, grossProfitInYer - expensesInYer);
 
     if (isLoading) {
         return <div className="text-center mt-10">جاري تحميل التقارير...</div>;
@@ -256,8 +250,6 @@ export default function Reports() {
                     { id: 'executive', title: 'الملخص التنفيذي', icon: Briefcase },
                     { id: 'sales', title: 'المبيعات والإيرادات', icon: TrendingUp },
                     { id: 'profit', title: 'الأرباح التشغيلية', icon: Wallet },
-                    { id: 'income-statement', title: 'قائمة الدخل', icon: BarChart3 },
-                    { id: 'performance', title: 'تحليل الأداء', icon: Activity },
                 ].map((item) => {
                     const isActive = activeTab === item.id;
                     return (
@@ -294,7 +286,7 @@ export default function Reports() {
                                         <div className="p-2.5 bg-blue-50 dark:bg-blue-500/10 rounded-xl text-blue-600 dark:text-blue-500">
                                             <Wallet size={20} />
                                         </div>
-                                        <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">إجمالي الرصيد النقدي</h3>
+                                        <h3 className="text-xs font-black text-slate-500 dark:text-slate-400">��جمالي ا��رصيد النقدي</h3>
                                     </div>
                                     <div className="text-2xl font-black text-slate-900 dark:text-white font-mono break-all leading-none">
                                         {liveStats.totalCash.toLocaleString()} <span className="text-[10px] text-slate-400">YER</span>
@@ -383,19 +375,7 @@ export default function Reports() {
                         </div>
                     )}
 
-                    {activeTab === 'income-statement' && (
-                        <IncomeStatementReport 
-                            invoices={invoices}
-                            expenses={expenses}
-                        />
-                    )}
 
-                    {activeTab === 'performance' && (
-                        <PerformanceAnalysisReport 
-                            invoices={invoices}
-                            expenses={expenses}
-                        />
-                    )}
                 </motion.div>
             </AnimatePresence>
 
