@@ -1,18 +1,21 @@
 import React, { useState, useEffect } from "react";
-import { Plus, X, Edit2, Trash2, Printer, Filter, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, X, Edit2, Trash2, Printer, Filter, ChevronDown, ChevronUp, FolderTree } from "lucide-react";
 import { dbService } from "../services/db";
-import { Voucher, CashBox, Customer, Supplier, AppUser } from "../types";
+import { Voucher, CashBox, Customer, Supplier, AppUser, ExpenseAccount } from "../types";
 import { cn, hasPermission } from "../lib/utils";
 import { motion, AnimatePresence } from "motion/react";
 import { syncEngine } from "../services/syncEngine";
+import { expenseAccountsService } from "../services/expenseAccountsService";
 
 export default function Vouchers({ currentUser, targetVoucherId }: { currentUser: AppUser; targetVoucherId?: string }) {
     const [vouchers, setVouchers] = useState<Voucher[]>([]);
     const [cashBoxes, setCashBoxes] = useState<CashBox[]>([]);
     const [partners, setPartners] = useState<(Customer | Supplier)[]>([]);
+    const [expenseAccounts, setExpenseAccounts] = useState<ExpenseAccount[]>([]);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingVoucher, setEditingVoucher] = useState<Voucher | null>(null);
     const [form, setForm] = useState<Partial<Voucher>>({ type: 'receipt', currency: 'YER' });
+    const [accountSelectMode, setAccountSelectMode] = useState<'partner' | 'expense'>('partner');
     const [isLoading, setIsLoading] = useState(false);
 
     // Filters
@@ -35,21 +38,30 @@ export default function Vouchers({ currentUser, targetVoucherId }: { currentUser
         if (found) {
             setEditingVoucher(found);
             setForm(found);
+            if (found.expenseAccountId) {
+                setAccountSelectMode('expense');
+            } else {
+                setAccountSelectMode('partner');
+            }
             setIsModalOpen(true);
         }
     }, [targetVoucherId, vouchers]);
 
     const loadData = async () => {
-        const [v, boxes, customers, suppliers] = await Promise.all([
+        const [v, boxes, customers, suppliers, exAccs] = await Promise.all([
             dbService.getAll("vouchers"),
             dbService.getAll("cashBoxes"),
             dbService.getAll("customers"),
-            dbService.getAll("suppliers")
+            dbService.getAll("suppliers"),
+            expenseAccountsService.getAllAccounts()
         ]);
         setVouchers(v as Voucher[]);
         setCashBoxes(boxes as CashBox[]);
         setPartners([...(customers as Customer[]).map(c => ({...c, partnerType: 'customer'})), ...(suppliers as Supplier[]).map(s => ({...s, partnerType: 'supplier'}))] as any[]);
+        setExpenseAccounts(exAccs);
     };
+
+    const subExpenseAccounts = expenseAccounts.filter(a => a.type === 'sub' && a.isActive !== false);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -210,7 +222,18 @@ export default function Vouchers({ currentUser, targetVoucherId }: { currentUser
                             <tr key={v.id} className="hover:bg-slate-50">
                                 <td className="p-3 font-mono font-bold">#{v.voucherNumber}</td>
                                 <td className="p-3">{new Date(v.createdAt).toLocaleDateString('ar-EG')}</td>
-                                <td className="p-3">{v.partnerName}</td>
+                                <td className="p-3">
+                                    {v.expenseAccountName ? (
+                                        <div className="flex items-center gap-1.5">
+                                            <span className="font-semibold text-slate-800">{v.expenseAccountName}</span>
+                                            <span className="text-[10px] bg-purple-100 text-purple-700 font-mono px-1.5 py-0.5 rounded font-bold">
+                                                {v.expenseAccountCode || 'مصروف'}
+                                            </span>
+                                        </div>
+                                    ) : (
+                                        v.partnerName || 'عام'
+                                    )}
+                                </td>
                                 <td className="p-3">{v.currency}</td>
                                 <td className="p-3">{v.boxName}</td>
                                 <td className="p-3 font-black text-slate-800">{v.amount.toLocaleString()}</td>
@@ -239,15 +262,91 @@ export default function Vouchers({ currentUser, targetVoucherId }: { currentUser
                             className="bg-white p-6 rounded-2xl w-full max-w-md space-y-4"
                         >
                             <h3 className="font-bold text-lg">{editingVoucher ? 'تعديل سند' : 'سند جديد'}</h3>
-                            <select className="w-full p-2 border rounded-xl text-sm" value={form.type} onChange={e => setForm(prev => ({ ...prev, type: e.target.value as any }))}>
+                            <select className="w-full p-2 border rounded-xl text-sm" value={form.type} onChange={e => {
+                                const newType = e.target.value as any;
+                                setForm(prev => ({ ...prev, type: newType }));
+                                if (newType === 'receipt') setAccountSelectMode('partner');
+                            }}>
                                 <option value="receipt">قبض</option>
                                 <option value="payment">صرف</option>
                             </select>
+
+                            {form.type === 'payment' && (
+                                <div className="flex gap-2 p-1 bg-slate-100 rounded-xl text-xs font-bold">
+                                    <button
+                                        type="button"
+                                        onClick={() => setAccountSelectMode('partner')}
+                                        className={`flex-1 py-1.5 rounded-lg transition-colors ${
+                                            accountSelectMode === 'partner' ? 'bg-white shadow text-slate-800' : 'text-slate-500'
+                                        }`}
+                                    >
+                                        عميل / مورد
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setAccountSelectMode('expense')}
+                                        className={`flex-1 py-1.5 rounded-lg transition-colors ${
+                                            accountSelectMode === 'expense' ? 'bg-emerald-600 text-white shadow' : 'text-slate-500'
+                                        }`}
+                                    >
+                                        بند مصروفات
+                                    </button>
+                                </div>
+                            )}
+
                             <input type="number" placeholder="المبلغ" required className="w-full p-2 border rounded-xl text-sm" value={form.amount || ''} onChange={e => setForm(prev => ({ ...prev, amount: Number(e.target.value) }))} />
-                            <select required className="w-full p-2 border rounded-xl text-sm" value={form.partnerId || ''} onChange={e => { const p = partners.find(p => p.id === e.target.value) as any; setForm(prev => ({ ...prev, partnerId: e.target.value, partnerName: p?.name || '', partnerType: p?.partnerType || 'none' })) }}>
-                                <option value="">-- اختر الحساب --</option>
-                                {partners.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                            </select>
+
+                            {accountSelectMode === 'expense' && form.type === 'payment' ? (
+                                <select 
+                                    required 
+                                    className="w-full p-2 border rounded-xl text-sm bg-emerald-50/50 font-medium" 
+                                    value={form.expenseAccountId || ''} 
+                                    onChange={e => { 
+                                        const acc = subExpenseAccounts.find(a => a.id === e.target.value); 
+                                        if (acc) {
+                                            setForm(prev => ({ 
+                                                ...prev, 
+                                                expenseAccountId: acc.id, 
+                                                expenseAccountName: acc.name, 
+                                                expenseAccountCode: acc.code,
+                                                partnerName: acc.name,
+                                                partnerId: acc.id || 'expense',
+                                                partnerType: 'none'
+                                            }));
+                                        } else {
+                                            setForm(prev => ({
+                                                ...prev,
+                                                expenseAccountId: undefined,
+                                                expenseAccountName: undefined,
+                                                expenseAccountCode: undefined
+                                            }));
+                                        }
+                                    }}
+                                >
+                                    <option value="">-- اختر بند المصروفات --</option>
+                                    {subExpenseAccounts.map(a => (
+                                        <option key={a.id} value={a.id}>
+                                            {a.code} - {a.name} ({a.parentName || 'عام'})
+                                        </option>
+                                    ))}
+                                </select>
+                            ) : (
+                                <select required className="w-full p-2 border rounded-xl text-sm" value={form.partnerId || ''} onChange={e => { 
+                                    const p = partners.find(p => p.id === e.target.value) as any; 
+                                    setForm(prev => ({ 
+                                        ...prev, 
+                                        partnerId: e.target.value, 
+                                        partnerName: p?.name || '', 
+                                        partnerType: p?.partnerType || 'none',
+                                        expenseAccountId: undefined,
+                                        expenseAccountName: undefined,
+                                        expenseAccountCode: undefined
+                                    })); 
+                                }}>
+                                    <option value="">-- اختر الحساب --</option>
+                                    {partners.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                </select>
+                            )}
                             <select required className="w-full p-2 border rounded-xl text-sm" value={form.boxId || ''} onChange={e => setForm(prev => ({ ...prev, boxId: e.target.value }))}>
                                 <option value="">-- اختر الصندوق --</option>
                                 {cashBoxes.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}

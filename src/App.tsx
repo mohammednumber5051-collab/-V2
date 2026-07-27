@@ -52,10 +52,12 @@ import OpticalHub from "./components/OpticalHub";
 import EnterpriseSettings from "./components/EnterpriseSettings";
 import AuditLogs from "./components/AuditLogs";
 import Vouchers from "./components/Vouchers";
+import ExpenseAccounts from "./components/ExpenseAccounts";
 import LockScreen from "./components/LockScreen";
 import PWAInstallPrompt from "./components/PWAInstallPrompt";
+import { FolderTree } from "lucide-react";
 
-type Page = 'dashboard' | 'invoices' | 'inventory' | 'transactions' | 'vouchers' | 'reports' | 'partners' | 'users' | 'quick_entry' | 'quick_entries_history' | 'daily_ledger' | 'optical_hub' | 'settings' | 'audit_logs';
+type Page = 'dashboard' | 'invoices' | 'inventory' | 'transactions' | 'vouchers' | 'reports' | 'partners' | 'users' | 'quick_entry' | 'quick_entries_history' | 'daily_ledger' | 'optical_hub' | 'settings' | 'audit_logs' | 'expense_accounts';
 
 const bottomNavItems = [
   { id: 'dashboard', label: 'الرئيسية', icon: BarChart3 },
@@ -67,6 +69,7 @@ const bottomNavItems = [
 
 const drawerItems = [
   { id: 'vouchers', label: 'سندات القبض والصرف', icon: FileText },
+  { id: 'expense_accounts', label: 'دليل حسابات المصروفات', icon: FolderTree },
   { id: 'reports', label: 'التقارير المالية', icon: FileText },
   { id: 'optical_hub', label: 'مركز الصيانة', icon: Eye },
   { id: 'quick_entry', label: 'الإدخال المالي السريع', icon: Zap },
@@ -344,6 +347,7 @@ function AppContent() {
       case 'inventory': return <Inventory currentUser={currentUser} />;
       case 'transactions': return <Transactions currentUser={currentUser} onNavigate={handleNavigate} />;
       case 'vouchers': return <Vouchers currentUser={currentUser} targetVoucherId={targetVoucherId || undefined} />;
+      case 'expense_accounts': return <ExpenseAccounts />;
       case 'reports': return <Reports />;
       case 'partners': return <PartnersWrapper />;
       case 'users': return <Users currentUser={currentUser} />;

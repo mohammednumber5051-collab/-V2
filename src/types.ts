@@ -274,6 +274,9 @@ export interface Transaction {
     toBoxId?: string;
     partnerId?: string;
     partnerName?: string;
+    expenseAccountId?: string;
+    expenseAccountName?: string;
+    expenseAccountCode?: string;
     debit: number; 
     credit: number;
     costAmount?: number; // Added for profit calculation from transactions (Revenue - Cost)
@@ -331,6 +334,20 @@ export interface SpecialOrder {
     updatedAt: string;
 }
 
+export interface ExpenseAccount {
+    id?: string;
+    code: string;
+    name: string;
+    parentId?: string | null;
+    parentName?: string;
+    type: 'parent' | 'sub';
+    description?: string;
+    isActive?: boolean;
+    recordStatus?: RecordStatus;
+    createdAt?: string;
+    updatedAt?: string;
+}
+
 export interface FinancialMovement {
     id: string;
     originalId: string;
@@ -340,6 +357,9 @@ export interface FinancialMovement {
     referenceNumber?: string;
     paymentType: string;
     partnerName: string;
+    expenseAccountId?: string;
+    expenseAccountName?: string;
+    expenseAccountCode?: string;
     totalAmount: number;
     discount: number;
     paidAmount: number;
@@ -361,6 +381,9 @@ export interface QuickFinancialEntry {
     partnerId?: string;
     partnerName: string;
     partnerPhone?: string;
+    expenseAccountId?: string;
+    expenseAccountName?: string;
+    expenseAccountCode?: string;
     amount: number;
     discount: number;
     netAmount: number;
@@ -406,6 +429,9 @@ export interface Voucher {
     partnerId: string;
     partnerName: string;
     partnerType?: 'customer' | 'supplier' | 'none';
+    expenseAccountId?: string;
+    expenseAccountName?: string;
+    expenseAccountCode?: string;
     amount: number;
     currency: Currency;
     boxId: string;
